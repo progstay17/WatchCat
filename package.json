@@ -1,0 +1,19 @@
+{
+  "name": "watchcat-windows",
+  "version": "1.1.0",
+  "description": "Pemantau & penjaga Windows di terminal: dashboard, bloatware, memory leak, pembersih disk, notifikasi Telegram. Tanpa dependensi.",
+  "bin": { "watchcat": "watchcat-tui.js" },
+  "main": "watchcat-tui.js",
+  "scripts": {
+    "start": "node watchcat-tui.js",
+    "headless": "node watchcat-tui.js --headless",
+    "check": "node tests/smoke.js",
+    "test": "node tests/smoke.js"
+  },
+  "engines": { "node": ">=18" },
+  "os": ["win32", "linux", "darwin"],
+  "keywords": ["windows", "tui", "monitor", "bloatware", "memory-leak", "telegram", "watchdog", "terminal"],
+  "license": "MIT",
+  "private": false,
+  "files": ["watchcat-tui.js", "plugins", "assets", "docs", "*.cmd", "tools"]
+}
