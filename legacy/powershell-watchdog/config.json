@@ -1,0 +1,51 @@
+{
+  "dryRun": true,
+  "intervalSeconds": 30,
+  "notifications": true,
+
+  "protectedProcesses": [
+    "code"
+  ],
+
+  "bloatProcesses": [
+    "compattelrunner",
+    "onedrive",
+    "skype*",
+    "yourphone",
+    "phoneexperiencehost",
+    "gamebarpresencewriter",
+    "hxtsr",
+    "teams",
+    "ms-teams"
+  ],
+
+  "blockStartup": [
+    "MicrosoftEdgeAutoLaunch*",
+    "OneDrive*",
+    "Docker Desktop",
+    "com.squirrel.Teams.Teams",
+    "MSTeams*",
+    "Skype*",
+    "Spotify*"
+  ],
+
+  "leakWindowSamples": 20,
+  "leakMinGrowthMB": 300,
+  "leakMinSizeMB": 600,
+  "leakMonotonicRatio": 0.8,
+  "leakCooldownMinutes": 30,
+  "leakIgnore": [
+    "memory compression", "vmmem", "vmmemwsl", "system",
+    "chrome", "msedge", "firefox", "brave", "opera"
+  ],
+  "leakKillAllowlist": [],
+
+  "cpuHogPercent": 85,
+  "cpuHogSamples": 6,
+  "cpuIgnore": [
+    "idle", "system", "msmpeng", "vmmem", "vmmemwsl", "memory compression"
+  ],
+
+  "lowRamPercent": 8,
+  "ramCooldownMinutes": 20
+}

@@ -1,0 +1,17 @@
+node_modules/
+# Data & rahasia lokal — jangan pernah di-commit
+tui-config.json
+tui.log
+*.jsonl
+scan-seen.json
+headless.pid
+net-worker.ps1
+.watchcat/
+*.log
+# OS / editor
+Thumbs.db
+desktop.ini
+.DS_Store
+.vscode/
+.idea/
+*.bak.js
