@@ -259,6 +259,15 @@ function listKey(tab, rows, k, rowKey) {
   tab.selKey = rowKey(rows[clamp(ni, 0, n - 1)]); return true;
 }
 
+// Daftar alamat antarmuka jaringan dari API bawaan Node.js (tanpa akses admin).
+function getNetworkRows() {
+  const rows = [];
+  for (const [name, list] of Object.entries(os.networkInterfaces())) {
+    for (const n of (list || [])) rows.push({ name, address: n.address, family: n.family, internal: !!n.internal, mac: n.mac || '—', cidr: n.cidr || '—' });
+  }
+  return rows.sort((a, b) => a.name.localeCompare(b.name) || a.family.localeCompare(b.family));
+}
+
 // ------------------------------------------------------------------ tampilan (view)
 const VIEWS = {};
 
@@ -275,13 +284,41 @@ VIEWS.dashboard = {
     const bw2 = clamp(iw - 34, 4, 20), used = 1 - os.freemem() / os.totalmem(); L('RAM     ' + bar(used, bw2) + ' ' + pad((used * 100).toFixed(0) + '%', 4, 'r') + '  kosong ' + fmtMem(os.freemem()), colorFor(used * 100));
     try { const d = fs.statfsSync(IS_WIN ? 'C:\\' : '/'), tot = d.blocks * d.bsize, fr = d.bavail * d.bsize; L('Disk    ' + bar(1 - fr / tot, bw2) + ' ' + pad(((1 - fr / tot) * 100).toFixed(0) + '%', 4, 'r') + '  kosong ' + fmtMem(fr), colorFor((1 - fr / tot) * 100)); } catch (e) { L('Disk    (tidak terbaca)', '2'); }
     scr.put(r.x + 2, ly, pad('Core    ', 8), '0'); S.cores.slice(0, iw - 9).forEach((c, i) => scr.put(r.x + 10 + i, ly, BLOCKS[clamp(1 + Math.round(c / 100 * 7), 1, 8)], colorFor(c))); ly++;
+    const netRows = getNetworkRows(), ipv4 = netRows.filter((n) => n.family === 'IPv4' && !n.internal);
+    L('Jaringan ' + netRows.length + ' alamat · ' + (ipv4.length ? ipv4.slice(0, 2).map((n) => n.address).join(', ') : 'tidak terhubung'), ipv4.length ? '36' : '2');
     L('Proses  ' + S.procs.length + ' jalan · pantau tiap ' + S.procInterval / 1000 + 'dtk' + (S.paused ? ' · DIJEDA' : '') + (S.autoKill ? ' · auto-bloat ON' : ''), S.paused ? '33' : '0');
     const leaks = S.flagged.size; if (S.procErr) L('! ' + S.procErr, '31'); else if (os.freemem() / os.totalmem() < 0.1) L('! RAM hampir habis', '1;31'); else if (leaks) L('! ' + leaks + ' proses dicurigai memory leak (tab Memori)', '1;33'); else L('Semua normal', '32');
-    const rw = r.w - bw, rows = [...S.groups].sort((a, b) => b.ws - a.ws).slice(0, sysH - 2), mx = rows.length ? rows[0].ws : 1, nw = 20;
-    scr.box(r.x + bw, y, rw, sysH, '36', 'Pemakai RAM terbesar');
-    rows.forEach((g, i) => scr.put(r.x + bw + 2, y + 1 + i, pad(g.name, nw) + pad(fmtMem(g.ws), 9, 'r') + ' ' + bar(g.ws / mx, Math.max(2, rw - 4 - nw - 10)), i === 0 ? '33' : '0'));
+    const rw = r.w - bw, rows = [...S.groups].sort((a, b) => b.ws - a.ws).slice(0, sysH - 2), mx = rows.length ? rows[0].ws : 1, nw = 17;
+    scr.box(r.x + bw, y, rw, sysH, '36', 'Pemakai resource terbesar');
+    rows.forEach((g, i) => {
+      const label = pad(g.name, nw) + pad(fmtMem(g.ws), 8, 'r') + pad(g.pct.toFixed(0) + '%', 5, 'r');
+      scr.put(r.x + bw + 2, y + 1 + i, label + ' ' + bar(g.ws / mx, Math.max(2, rw - 4 - nw - 15)), i === 0 ? '33' : '0');
+    });
   },
   key() { return false; },
+};
+
+VIEWS.network = {
+  title: 'Jaringan', hints: 'r segarkan · data alamat dari sistem operasi',
+  render(scr, r, tab) {
+    const rows = getNetworkRows(), active = rows.filter((n) => !n.internal);
+    scr.put(r.x, r.y, pad(' ' + rows.length + ' alamat · ' + active.length + ' alamat non-loopback · statistik trafik realtime belum tersedia di API lintas platform', r.w), '2');
+    const cols = [
+      { t: 'Antarmuka', w: 22, f: (x) => x.name },
+      { t: 'IP', w: 34, f: (x) => x.address },
+      { t: 'Tipe', w: 7, f: (x) => x.family === 'IPv4' ? 'IPv4' : 'IPv6' },
+      { t: 'Status', w: 12, f: (x) => x.internal ? 'internal' : 'tersedia', style: (x) => x.internal ? '2' : '32' },
+      { t: 'MAC', flex: true, f: (x) => x.mac },
+    ];
+    const sel = drawTable(scr, r.x, r.y + 1, r.w, r.h - 1, cols, rows, tab.selKey, (x) => x.name + '|' + x.address, tab);
+    if (sel && !tab.selKey) tab.selKey = sel.name + '|' + sel.address;
+    if (!rows.length) scr.put(r.x + 2, r.y + 3, 'Tidak ada antarmuka jaringan yang terdeteksi.', '2');
+  },
+  key(k, tab) {
+    const rows = getNetworkRows();
+    if (listKey(tab, rows, k, (x) => x.name + '|' + x.address)) return true;
+    return false;
+  },
 };
 
 VIEWS.procs = {
@@ -423,7 +460,7 @@ VIEWS.log = {
     return true;
   },
 };
-const VIEW_ORDER = ['dashboard', 'procs', 'startup', 'memory', 'bloat', 'log'];
+const VIEW_ORDER = ['dashboard', 'procs', 'network', 'startup', 'memory', 'bloat', 'log'];
 
 function newTab(type) { const v = VIEWS[type]; const t = Object.assign({ type, sel: 0, scroll: 0 }, v.init ? v.init() : {}); S.tabs.push(t); S.active = S.tabs.length - 1; return t; }
 function tabTitle(i) { const t = S.tabs[i], same = S.tabs.filter((x) => x.type === t.type); return VIEWS[t.type].title + (same.length > 1 ? ' #' + (same.indexOf(t) + 1) : ''); }
