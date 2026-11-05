@@ -157,28 +157,31 @@ module.exports = function (WC) {
   } else initDrives();
 
   WC.addView('disk', {
-    title: 'Disk', hints: '↑↓ pilih · c bersihkan · C bersihkan semua · r hitung ulang · v folder terbesar',
+    title: 'Disk', hints: '↑↓ pilih · c bersihkan · C bersihkan semua · r hitung ulang · v folder terbesar · s pindai ulang
     init() { return { mode: 'clean' }; },
     rows(tab) { return tab.mode === 'clean' ? D.cands.map((c) => Object.assign(c, { k: c.id })) : D.big.map((b) => Object.assign(b, { k: b.path })); },
     render(scr, r, tab) {
-      const dh = Math.min(D.drives.length, 4) + 2;
+      const dh = Math.min(Math.max(D.drives.length, 1), 4) + 2;
       scr.box(r.x, r.y, r.w, dh, '36', 'Drive');
-      D.drives.slice(0, 4).forEach((d, i) => { const used = d.total ? 1 - d.free / d.total : 0, st = colorFor(used * 100); scr.put(r.x + 2, r.y + 1 + i, pad(d.name, 4) + bar(used, clamp(r.w - 50, 10, 40)) + ' ' + pad((used * 100).toFixed(0) + '%', 4, 'r') + '  kosong ' + fmtMem(d.free) + ' dari ' + fmtMem(d.total), st); });
+      if (!D.drives.length) scr.put(r.x + 2, r.y + 1, 'Menunggu informasi drive…', '2');
+      D.drives.slice(0, 4).forEach((d, i) => { const used = d.total ? 1 - d.free / d.total : 0, st = colorFor(used * 100); scr.put(r.x + 2, r.y + 1 + i, pad(d.name, 4) + (d.total ? bar(used, clamp(r.w - 50, 10, 40)) + ' ' + pad((used * 100).toFixed(0) + '%', 4, 'r') + '  kosong ' + fmtMem(d.free) + ' dari ' + fmtMem(d.total) : 'kapasitas belum terbaca'), d.total ? st : '2'); });
       const y0 = r.y + dh, th = r.h - dh - 1;
       const rows = this.rows(tab);
       if (tab.mode === 'clean') {
         const tot = D.cands.reduce((a, c) => a + (c.admin && !WC.isAdmin() ? 0 : c.bytes || 0), 0);
-        scr.put(r.x, y0, pad(' Pembersih · bisa dibebaskan ± ' + fmtMem(tot) + (D.scanning ? ' · menghitung…' : '') + (D.lastMsg ? ' · ' + D.lastMsg : ''), r.w), '2');
+        scr.put(r.x, y0, pad('Pembersih · potensi ' + fmtMem(tot) + (D.scanning ? ' · sedang menghitung…' : D.scanned ? ' · hasil tersedia' : ' · menunggu scan') + (D.lastMsg ? ' · ' + D.lastMsg : ''), r.w), D.scanning ? '36' : '2');
         const cols = [{ t: 'Lokasi', w: 34, f: (x) => x.label }, { t: 'Ukuran', w: 10, a: 'r', f: (x) => (x.busy ? '…' : x.bytes == null ? '?' : fmtMem(x.bytes)), style: (x) => (x.bytes > 1e9 ? '33' : '0') },
           { t: 'File', w: 8, a: 'r', f: (x) => (x.files == null ? '' : x.files) }, { t: 'Catatan', flex: true, f: (x) => (x.admin && !WC.isAdmin() ? '[butuh admin] ' : '') + x.note }];
         const sel = ui.drawTable(scr, r.x, y0 + 1, r.w, th, cols, rows, tab.selKey, (x) => x.k, tab, (x) => (x.admin && !WC.isAdmin() ? '2' : '0'));
         if (sel && !tab.selKey) tab.selKey = sel.k;
+        if (!rows.length) scr.put(r.x + 2, y0 + 3, D.scanning ? 'Menghitung ukuran file sementara…' : 'Tidak ada lokasi pembersihan yang tersedia.', '2');
       } else {
         scr.put(r.x, y0, pad(' Folder terbesar di profil Anda · ' + (D.bigRun ? 'memindai ' + D.bigDone + '/' + D.bigTotal + '… (x batal)' : D.big.length ? 'selesai (' + D.bigDone + ' folder) · Enter buka di Explorer · s pindai ulang' : 'tekan s untuk memindai'), r.w), '2');
         const mx = Math.max(1, ...rows.map((x) => x.bytes));
         const cols = [{ t: 'Folder', w: 38, f: (x) => x.name }, { t: 'Ukuran', w: 10, a: 'r', f: (x) => fmtMem(x.bytes) }, { t: 'File', w: 8, a: 'r', f: (x) => x.files }, { t: '', flex: true, f: (x, w) => bar(x.bytes / mx, w), style: () => '34' }];
         const sel = ui.drawTable(scr, r.x, y0 + 1, r.w, th, cols, rows, tab.selKey, (x) => x.k, tab);
         if (sel && !tab.selKey) tab.selKey = sel.k;
+        if (!rows.length) scr.put(r.x + 2, y0 + 3, D.bigRun ? 'Memindai folder profil…' : 'Belum ada hasil. Tekan s untuk memindai folder terbesar.', '2');
       }
     },
     key(k, tab) {
