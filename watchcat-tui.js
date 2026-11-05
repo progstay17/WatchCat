@@ -470,7 +470,7 @@ function buildFrame(w, h) {
     scr.put(34, 0, 'PROSES ' + procCount, '30;47');
     scr.put(48, 0, adminCache === true ? 'ADMIN' : adminCache === false ? 'USER' : '…', '30;47');
     scr.put(w - 9, 0, hhmmss(new Date()), '30;47');
-    scr.put(w - 25, 0, 'F10 Menu · F1 Bantuan', '30;47');
+    scr.put(w - 33, 0, 'F10 Menu · F1 Bantuan', '30;47');
   } else {
     scr.put(12, 0, 'C:' + cpuNow.toFixed(0) + '%', cpuNow >= 85 ? '1;31;47' : '30;47');
     scr.put(20, 0, 'R:' + ramNow.toFixed(0) + '%', ramNow >= 90 ? '1;31;47' : '30;47');
