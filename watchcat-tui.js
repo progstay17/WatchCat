@@ -298,29 +298,6 @@ VIEWS.dashboard = {
   key() { return false; },
 };
 
-VIEWS.network = {
-  title: 'Jaringan', hints: 'r segarkan · data alamat dari sistem operasi',
-  render(scr, r, tab) {
-    const rows = getNetworkRows(), active = rows.filter((n) => !n.internal);
-    scr.put(r.x, r.y, pad(' ' + rows.length + ' alamat · ' + active.length + ' alamat non-loopback · statistik trafik realtime belum tersedia di API lintas platform', r.w), '2');
-    const cols = [
-      { t: 'Antarmuka', w: 16, f: (x) => x.name },
-      { t: 'IP', w: 27, f: (x) => x.address },
-      { t: 'Tipe', w: 6, f: (x) => x.family === 'IPv4' ? 'IPv4' : 'IPv6' },
-      { t: 'Status', w: 9, f: (x) => x.internal ? 'internal' : 'aktif', style: (x) => x.internal ? '2' : '32' },
-      { t: 'MAC', flex: true, f: (x) => x.mac },
-    ];
-    const sel = drawTable(scr, r.x, r.y + 1, r.w, r.h - 1, cols, rows, tab.selKey, (x) => x.name + '|' + x.address, tab);
-    if (sel && !tab.selKey) tab.selKey = sel.name + '|' + sel.address;
-    if (!rows.length) scr.put(r.x + 2, r.y + 3, 'Tidak ada antarmuka jaringan yang terdeteksi.', '2');
-  },
-  key(k, tab) {
-    const rows = getNetworkRows();
-    if (listKey(tab, rows, k, (x) => x.name + '|' + x.address)) return true;
-    return false;
-  },
-};
-
 VIEWS.procs = {
   title: 'Proses', hints: '↑↓ pilih · k hentikan · s urut · g grup/PID · / cari',
   init() { return { sort: 'mem', group: true, filter: '' }; },
@@ -460,7 +437,7 @@ VIEWS.log = {
     return true;
   },
 };
-const VIEW_ORDER = ['dashboard', 'procs', 'network', 'startup', 'memory', 'bloat', 'log'];
+const VIEW_ORDER = ['dashboard', 'procs', 'startup', 'memory', 'bloat', 'log'];
 
 function newTab(type) { const v = VIEWS[type]; const t = Object.assign({ type, sel: 0, scroll: 0 }, v.init ? v.init() : {}); S.tabs.push(t); S.active = S.tabs.length - 1; return t; }
 function tabTitle(i) { const t = S.tabs[i], same = S.tabs.filter((x) => x.type === t.type); return VIEWS[t.type].title + (same.length > 1 ? ' #' + (same.indexOf(t) + 1) : ''); }
