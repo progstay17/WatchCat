@@ -4,15 +4,15 @@
 module.exports = function (WC) {
   const { S, u, ui, IS_WIN, VIEWS, fs, path, cp, DATA_DIR } = WC;
   const { pad, fmtMem } = u;
-  const P = { parents: new Map(), lastParents: 0, loadingParents: false, detail: new Map(), want: null, loadingDetail: false, suspended: new Set() };
+  const P = { parents: new Map(), lastParents: 0, loadingParents: false, parentsErr: '', detail: new Map(), want: null, loadingDetail: false, suspended: new Set() };
   const parentsWanted = () => S.tabs.some((t) => t.type === 'procs' && t.tree);
 
   // ------------------------------------------------------------ induk proses (untuk pohon)
   function fetchParents() {
     if (P.loadingParents) return; P.loadingParents = true;
-    const done = (out) => { for (const l of out.split(/\r?\n/)) { const m = l.trim().match(/^(\d+)[|\s]+(\d+)$/); if (m) P.parents.set(+m[1], +m[2]); } P.lastParents = Date.now(); P.loadingParents = false; };
-    if (IS_WIN) WC.runPS('Get-CimInstance Win32_Process | ForEach-Object { "{0}|{1}" -f $_.ProcessId, $_.ParentProcessId }', (e, out) => done(e ? '' : out), 30000);
-    else cp.execFile('ps', ['-eo', 'pid=,ppid='], (e, out) => done(e ? '' : String(out)));
+    const done = (out, err) => { if (!err) { for (const l of out.split(/\r?\n/)) { const m = l.trim().match(/^(\d+)[|\s]+(\d+)$/); if (m) P.parents.set(+m[1], +m[2]); } P.lastParents = Date.now(); P.parentsErr = ''; } else P.parentsErr = String(err.message || err).split('\n')[0]; P.loadingParents = false; };
+    if (IS_WIN) WC.runPS('Get-CimInstance Win32_Process | ForEach-Object { "{0}|{1}" -f $_.ProcessId, $_.ParentProcessId }', (e, out) => done(out || '', e), 30000);
+    else cp.execFile('ps', ['-eo', 'pid=,ppid='], (e, out) => done(String(out || ''), e));
   }
 
   function treeRows(rows) {
@@ -85,7 +85,7 @@ module.exports = function (WC) {
   };
   PV.detail = function (sel) {
     const pid = sel.pids[0]; P.want = { pid, since: P.want && P.want.pid === pid ? P.want.since : Date.now() };
-    const d = P.detail.get(pid); if (!d) return ['Memuat detail…'];
+    const d = P.detail.get(pid); if (!d) return [P.loadingDetail ? 'Memuat detail proses…' : 'Detail belum tersedia · pilih proses lagi untuk mencoba'];
     if (d.err) return ['Detail tidak tersedia: ' + d.err];
     const par = S.procs.find((p) => p.pid === d.ppid);
     return ['Path : ' + (d.path || '(tidak terbaca)') + (sel.pids.length > 1 ? '   [PID ' + pid + ' dari ' + sel.pids.length + ' proses]' : ''), 'Cmd  : ' + (d.cmd || '-'),
