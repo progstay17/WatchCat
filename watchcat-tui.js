@@ -304,10 +304,10 @@ VIEWS.network = {
     const rows = getNetworkRows(), active = rows.filter((n) => !n.internal);
     scr.put(r.x, r.y, pad(' ' + rows.length + ' alamat · ' + active.length + ' alamat non-loopback · statistik trafik realtime belum tersedia di API lintas platform', r.w), '2');
     const cols = [
-      { t: 'Antarmuka', w: 22, f: (x) => x.name },
-      { t: 'IP', w: 34, f: (x) => x.address },
-      { t: 'Tipe', w: 7, f: (x) => x.family === 'IPv4' ? 'IPv4' : 'IPv6' },
-      { t: 'Status', w: 12, f: (x) => x.internal ? 'internal' : 'tersedia', style: (x) => x.internal ? '2' : '32' },
+      { t: 'Antarmuka', w: 16, f: (x) => x.name },
+      { t: 'IP', w: 27, f: (x) => x.address },
+      { t: 'Tipe', w: 6, f: (x) => x.family === 'IPv4' ? 'IPv4' : 'IPv6' },
+      { t: 'Status', w: 9, f: (x) => x.internal ? 'internal' : 'aktif', style: (x) => x.internal ? '2' : '32' },
       { t: 'MAC', flex: true, f: (x) => x.mac },
     ];
     const sel = drawTable(scr, r.x, r.y + 1, r.w, r.h - 1, cols, rows, tab.selKey, (x) => x.name + '|' + x.address, tab);
