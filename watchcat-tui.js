@@ -64,7 +64,7 @@ const S = {
   tabs: [], active: 0, overlay: null, paused: false, procInterval: 3000, autoKill: false,
   cpu: [], ram: [], cores: [], prevCpu: null,
   procs: [], groups: [], hist: new Map(), prevProc: new Map(), polling: false, procErr: '', lastPoll: 0,
-  startup: [], backup: [], log: [], cooldown: new Map(), flagged: new Set(),
+  startup: [], backup: [], startupLoading: false, startupErr: '', log: [], cooldown: new Map(), flagged: new Set(),
 };
 
 function logLine(level, msg) {
@@ -183,14 +183,19 @@ function readBackup() {
   return out;
 }
 async function refreshStartup() {
-  let rows;
-  if (IS_WIN) rows = (await Promise.all(RUN_KEYS.map(regQuery))).flat();
-  else rows = S.demoStartup || (S.demoStartup = [{ scope: 'HKCU', key: 'HKCU\\...\\Run', name: 'MicrosoftEdgeAutoLaunch_DEMO', value: '"msedge.exe" --no-startup-window' }, { scope: 'HKCU', key: 'HKCU\\...\\Run', name: 'OneDrive', value: '"OneDrive.exe" /background' }, { scope: 'HKLM', key: 'HKLM\\...\\Run', name: 'SecurityHealth', value: 'SecurityHealthSystray.exe' }]);
-  rows.forEach((r) => { r.bloat = matchAny(r.name, CFG.rBlock); });
-  S.startup = rows;
-  const active = new Set(rows.map((r) => r.key + '|' + r.name));
-  const seen = new Set(); S.backup = readBackup().filter((r) => { const id = r.key + '|' + r.name; if (active.has(id) || seen.has(id)) return false; seen.add(id); return true; });
-  emit('startup');
+  if (S.startupLoading) return;
+  S.startupLoading = true; S.startupErr = '';
+  try {
+    let rows;
+    if (IS_WIN) rows = (await Promise.all(RUN_KEYS.map(regQuery))).flat();
+    else rows = S.demoStartup || (S.demoStartup = [{ scope: 'HKCU', key: 'HKCU\\...\\Run', name: 'MicrosoftEdgeAutoLaunch_DEMO', value: '"msedge.exe" --no-startup-window' }, { scope: 'HKCU', key: 'HKCU\\...\\Run', name: 'OneDrive', value: '"OneDrive.exe" /background' }, { scope: 'HKLM', key: 'HKLM\\...\\Run', name: 'SecurityHealth', value: 'SecurityHealthSystray.exe' }]);
+    rows.forEach((r) => { r.bloat = matchAny(r.name, CFG.rBlock); });
+    S.startup = rows;
+    const active = new Set(rows.map((r) => r.key + '|' + r.name));
+    const seen = new Set(); S.backup = readBackup().filter((r) => { const id = r.key + '|' + r.name; if (active.has(id) || seen.has(id)) return false; seen.add(id); return true; });
+    emit('startup');
+  } catch (e) { S.startupErr = String(e.message || e).split('\\n')[0]; logLine('WARN', 'Gagal memuat startup: ' + S.startupErr); }
+  finally { S.startupLoading = false; }
 }
 function removeStartup(e) {
   try { fs.mkdirSync(DATA_DIR, { recursive: true }); fs.appendFileSync(BACKUP_FILE, JSON.stringify({ time: new Date().toISOString(), key: e.key, name: e.name, value: e.value }) + '\n'); } catch (x) { logLine('WARN', 'Cadangan gagal ditulis: ' + x.message); return; }
@@ -354,12 +359,12 @@ VIEWS.startup = {
   rows() { return [...S.startup.map((e) => ({ k: 'a|' + e.key + '|' + e.name, kind: 'aktif', e })), ...S.backup.map((e) => ({ k: 'b|' + e.key + '|' + e.name, kind: 'cadangan', e }))]; },
   render(scr, r, tab) {
     const rows = this.rows();
-    scr.put(r.x, r.y, pad(' Aktif: ' + S.startup.length + ' · Dicadangkan (sudah dihapus, bisa dipulihkan): ' + S.backup.length + (IS_WIN ? '' : ' · [mode demo, bukan Windows]'), r.w), '2');
+    scr.put(r.x, r.y, pad(' ' + (S.startupLoading ? 'Memuat data startup…' : S.startupErr ? 'Gagal memuat: ' + S.startupErr + ' · tekan r untuk ulangi' : 'Aktif: ' + S.startup.length + ' · cadangan: ' + S.backup.length) + (IS_WIN ? '' : ' · [mode demo, bukan Windows]'), r.w), S.startupErr ? '33' : S.startupLoading ? '36' : '2');
     const cols = [{ t: 'Status', w: 10, f: (x) => (x.kind === 'cadangan' ? 'dihapus' : x.e.bloat ? 'bloat' : 'aktif'), style: (x) => (x.kind === 'cadangan' ? '2' : x.e.bloat ? '33' : '32') },
       { t: 'Lokasi', w: 7, f: (x) => x.e.scope || (x.e.key.startsWith('HKLM') ? 'HKLM' : 'HKCU') }, { t: 'Nama', w: 34, f: (x) => x.e.name }, { t: 'Perintah', flex: true, f: (x) => x.e.value }];
     const sel = drawTable(scr, r.x, r.y + 1, r.w, r.h - 1, cols, rows, tab.selKey, (x) => x.k, tab, (x) => (x.kind === 'cadangan' ? '2' : '0'));
     if (sel && !tab.selKey) tab.selKey = sel.k;
-    if (!rows.length) scr.put(r.x + 2, r.y + 3, 'Tidak ada entri autostart.', '2');
+    if (!rows.length) scr.put(r.x + 2, r.y + 3, S.startupLoading ? 'Sedang membaca registry startup…' : S.startupErr ? 'Data belum tersedia. Tekan r untuk mencoba lagi.' : 'Tidak ada entri autostart atau cadangan.', S.startupErr ? '33' : '2');
   },
   key(k, tab) {
     const rows = this.rows(), cur = rows.find((x) => x.k === tab.selKey) || rows[0];
@@ -464,7 +469,7 @@ function openHelp() { S.overlay = { type: 'help' }; }
 function cycleInterval(d) { const L = [2000, 3000, 5000, 10000]; S.procInterval = L[clamp(L.indexOf(S.procInterval) + d, 0, L.length - 1)] || 3000; if (d > 0 && S.procInterval === 10000 && L.indexOf(S.procInterval) === L.length - 1) { /* batas atas */ } }
 function refreshAll() { pollProcs(); refreshStartup(); }
 
-const HELP = ['WatchCat TUI v' + VERSION, '', 'Tab        ← →  /  Tab  /  1-9      pindah tab', 'Tab baru   n      pilih fitur; satu fitur boleh dibuka di banyak tab', 'Tutup tab  w', 'Menu       F10  atau  m', 'Segarkan   r        Jeda  p        Interval  + / -', 'Daftar     ↑ ↓  PgUp PgDn  Home End', 'Keluar     q  atau  Ctrl+C', '', 'Proses: k hentikan · s urut · g grup/PID · / cari', 'Startup: d hapus dari autostart · Enter pulihkan', 'Bloatware: k / K hentikan · a auto-hentikan', '', 'Proses sistem & yang ada di daftar dilindungi tidak bisa dihentikan.', 'Tekan tombol apa saja untuk menutup.'];
+const HELP = ['WatchCat TUI v' + VERSION, '', 'Tab        ← →  /  Tab  /  1-9      pindah tab', 'Tab baru   n      pilih fitur; satu fitur boleh dibuka di banyak tab', 'Tutup tab  w', 'Menu       F10  atau  m', 'Segarkan   r / F5     Jeda  p        Interval  + / -', 'Daftar     ↑ ↓  PgUp PgDn  Home End · / cari · Esc hapus filter', 'Keluar     q  atau  Ctrl+C', '', 'Proses: k hentikan · s urut · g grup/PID · / cari', 'Startup: d hapus dari autostart · Enter pulihkan', 'Bloatware: k / K hentikan · a auto-hentikan', '', 'Proses sistem & yang ada di daftar dilindungi tidak bisa dihentikan.', 'Tekan tombol apa saja untuk menutup.'];
 
 function drawOverlay(scr) {
   const o = S.overlay; if (!o) return;
@@ -533,8 +538,10 @@ function buildFrame(w, h) {
   // Footer memisahkan bantuan kontekstual dari status pemantauan.
   scr.fill(0, h - 1, w, 1, ' ', '30;47');
   scr.put(1, h - 1, pad(v.hints, Math.max(0, w - 34)), '30;47');
-  const live = S.paused ? 'JEDA' : S.polling ? 'MEMINDAI' : 'LIVE';
-  scr.put(w - 32, h - 1, pad(live, 9), S.paused ? '1;31;47' : S.polling ? '1;33;47' : '1;32;47');
+  const busy = S.polling || S.startupLoading;
+  const issue = S.procErr || S.startupErr;
+  const live = S.paused ? 'JEDA' : busy ? 'MEMUAT' : issue ? 'PERIKSA' : 'LIVE';
+  scr.put(w - 32, h - 1, pad(live, 9), S.paused ? '1;31;47' : busy || issue ? '1;33;47' : '1;32;47');
   scr.put(w - 22, h - 1, pad('RAM kosong ' + fmtMem(os.freemem()), 21, 'r'), '30;47');
   drawOverlay(scr);
   return scr;
@@ -568,6 +575,7 @@ function handleKey(str, key) {
   else if (/^[1-9]$/.test(str || '')) { if (+str <= S.tabs.length) S.active = +str - 1; }
   else if (k.name === 'n') openNewTabMenu(); else if (k.name === 'w') closeTab(S.active);
   else if (k.name === 'f10' || k.name === 'm') openMenu(); else if (k.name === 'f1' || str === '?') openHelp();
+  else if (k.name === 'f5' || (k.ctrl && k.name === 'r')) refreshAll();
   else if (k.name === 'p') { S.paused = !S.paused; } else if (k.name === 'r') refreshAll();
   else if (str === '+' || str === '=') cycleInterval(-1); else if (str === '-') cycleInterval(1); else if (k.name === 'q') quit();
 }
