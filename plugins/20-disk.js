@@ -46,7 +46,7 @@ async function cleanDir(root, filter) {
 module.exports = function (WC) {
   const { S, u, ui, IS_WIN } = WC;
   const { pad, clamp, fmtMem, bar, colorFor } = u;
-  const D = { drives: [], cands: [], scanned: false, scanning: false, big: [], bigRun: false, bigDone: 0, bigTotal: 0, ctl: { cancel: false }, lastMsg: '' };
+  const D = { drives: [], cands: [], scanned: false, scanning: false, big: [], bigRun: false, bigDone: 0, bigTotal: 0, ctl: { cancel: false }, lastMsg: '', err: '' };
   const J = path.join;
   const T = process.env.TEMP || os.tmpdir(), L = process.env.LOCALAPPDATA, W = process.env.SystemRoot, HOME = process.env.USERPROFILE || os.homedir();
   const older = (h) => (n, st) => Date.now() - st.mtimeMs > h * 3600e3;
@@ -88,13 +88,15 @@ module.exports = function (WC) {
         for (const p of c.paths) { const r = await dirSize(p, c.filter, D.ctl); b += r.bytes; f += r.files; }
         c.bytes = b; c.files = f;
       }
-    } catch (e) { c.bytes = null; }
+    } catch (e) { c.bytes = null; c.err = String(e.message || e).split('\n')[0]; D.err = c.err; }
+    if (!c.err) c.err = '';
     c.busy = false;
   }
   async function scanAll() {
-    if (D.scanning) return; D.scanning = true;
-    for (const c of D.cands) await scanCand(c);
-    D.scanning = false; D.scanned = true;
+    if (D.scanning) return; D.scanning = true; D.err = '';
+    try { for (const c of D.cands) await scanCand(c); D.scanned = true; }
+    catch (e) { D.err = String(e.message || e).split('\n')[0]; WC.logLine('WARN', 'Scan disk gagal: ' + D.err); }
+    finally { D.scanning = false; }
   }
 
   async function runClean(c) {
@@ -133,9 +135,10 @@ module.exports = function (WC) {
     const targets = [];
     const sub = async (base, prefix) => { try { for (const e of await fsp.readdir(base, { withFileTypes: true })) if (e.isDirectory() && !e.isSymbolicLink()) targets.push({ path: path.join(base, e.name), name: prefix + e.name }); } catch (x) { /* abaikan */ } };
     await sub(HOME, ''); if (IS_WIN) { await sub(J(HOME, 'AppData', 'Local'), 'AppData\\Local\\'); await sub(J(HOME, 'AppData', 'Roaming'), 'AppData\\Roaming\\'); }
-    D.bigTotal = targets.length;
-    for (const t of targets) { if (D.ctl.cancel) break; const r = await dirSize(t.path, null, D.ctl); D.big.push({ path: t.path, name: t.name, bytes: r.bytes, files: r.files }); D.big.sort((a, b) => b.bytes - a.bytes); D.bigDone++; }
-    D.bigRun = false;
+    D.bigTotal = targets.length; D.err = '';
+    try { for (const t of targets) { if (D.ctl.cancel) break; const r = await dirSize(t.path, null, D.ctl); D.big.push({ path: t.path, name: t.name, bytes: r.bytes, files: r.files }); D.big.sort((a, b) => b.bytes - a.bytes); D.bigDone++; } }
+    catch (e) { D.err = String(e.message || e).split('\n')[0]; WC.logLine('WARN', 'Scan folder besar gagal: ' + D.err); }
+    finally { D.bigRun = false; }
   }
   const openFolder = (p) => { try { cp.spawn(IS_WIN ? 'explorer.exe' : 'xdg-open', [p], { detached: true, stdio: 'ignore' }).unref(); } catch (e) { WC.logLine('WARN', 'Tidak bisa membuka ' + p); } };
 
@@ -194,7 +197,7 @@ module.exports = function (WC) {
         if (k.name === 'return' && cur) { openFolder(cur.path); return true; }
         return false;
       }
-      if (k.name === 'r') { D.scanned = false; scanAll(); return true; }
+      if (k.name === 'r') { D.scanned = false; D.err = ''; scanAll(); return true; }
       if (k.name === 'c' && !k.shift && cur) {
         if (cur.busy) return true;
         if (cur.admin && !WC.isAdmin()) { WC.logLine('WARN', cur.label + ': butuh administrator.'); return true; }
