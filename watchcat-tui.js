@@ -295,17 +295,28 @@ VIEWS.procs = {
   },
   render(scr, r, tab) {
     const rows = this.rows(tab), mx = Math.max(1, ...rows.map((x) => x.ws)), detH = r.h >= 22 ? 9 : (r.h >= 16 ? 6 : 0);
-    scr.put(r.x, r.y, pad(' Urut: ' + { mem: 'memori', cpu: 'CPU', name: 'nama' }[tab.sort] + ' · ' + (tab.group ? 'per nama' : 'per PID') + ' · * = dilindungi, kuning = bloatware' + (tab.filter ? ' · cari: "' + tab.filter + '"' : '') + (S.procErr ? ' · ! ' + S.procErr : ''), r.w), '2');
+    const age = S.lastPoll ? Math.max(0, Math.floor((Date.now() - S.lastPoll) / 1000)) : null;
+    const summary = rows.length + ' entri' + (tab.group ? ' · dikelompokkan' : ' · per PID') + ' · urut ' + { mem: 'memori', cpu: 'CPU', name: 'nama' }[tab.sort]
+      + (age === null ? ' · menunggu data' : ' · diperbarui ' + age + ' dtk lalu')
+      + (tab.filter ? ' · filter: "' + tab.filter + '"' : '') + (S.procErr ? ' · ! ' + S.procErr : '');
+    scr.put(r.x, r.y, pad(' ' + summary, r.w), S.procErr ? '33' : '2');
     const cols = [{ t: 'Nama', w: 26, f: (x) => (x.disp || x.name) + (isProtected(x.name) ? ' *' : '') }, { t: tab.group ? 'Jml' : 'PID', w: 6, a: 'r', f: (x) => x.n }, { t: 'CPU%', w: 6, a: 'r', f: (x) => x.pct.toFixed(1), style: (x) => colorFor(x.pct * 2) },
       { t: 'Memori', w: 10, a: 'r', f: (x) => fmtMem(x.ws) }, { t: '', flex: true, f: (x, w) => bar(x.ws / mx, w), style: () => '34' }];
     const sel = drawTable(scr, r.x, r.y + 1, r.w, r.h - 1 - detH, cols, rows, tab.selKey, (x) => x.k, tab, (x) => (isBloat(x.name) ? '33' : '0'));
+    if (!rows.length) {
+      const msg = tab.filter ? 'Tidak ada proses yang cocok. Tekan Esc untuk menghapus filter.' : (S.procErr ? 'Data proses belum tersedia. Tekan r untuk mencoba lagi.' : 'Menunggu daftar proses pertama…');
+      scr.put(r.x + 2, r.y + 3, pad(msg, r.w - 4), '2');
+    }
     if (sel && !tab.selKey) tab.selKey = sel.k;
     if (detH && sel) {
-      const h = S.hist.get(sel.name.toLowerCase()), y = r.y + r.h - detH; scr.box(r.x, y, r.w, detH, '36', 'Detail: ' + sel.name);
-      scr.put(r.x + 2, y + 1, pad(sel.pids.length + ' proses · PID ' + sel.pids.slice(0, 6).join(', ') + (sel.pids.length > 6 ? ' …' : '') + (isProtected(sel.name) ? ' · DILINDUNGI' : isBloat(sel.name) ? ' · bloatware' : ''), r.w - 4));
-      if (h) { scr.put(r.x + 2, y + 2, 'Memori ', '2'); scr.put(r.x + 9, y + 2, spark(h.v, r.w - 12), '36'); scr.put(r.x + 2, y + 3, pad('sekarang ' + Math.round(h.v[h.v.length - 1]) + ' MB · rentang ' + Math.round(Math.min(...h.v)) + '–' + Math.round(Math.max(...h.v)) + ' MB (' + h.v.length + ' sampel)', r.w - 4), '2'); }
+      const h = S.hist.get(sel.name.toLowerCase()), y = r.y + r.h - detH;
+      scr.box(r.x, y, r.w, detH, '36', 'Ringkasan proses: ' + sel.name);
+      const status = isProtected(sel.name) ? 'DILINDUNGI' : isBloat(sel.name) ? 'BLOATWARE' : 'NORMAL';
+      scr.put(r.x + 2, y + 1, pad(sel.pids.length + ' proses · PID ' + sel.pids.slice(0, 6).join(', ') + (sel.pids.length > 6 ? ' …' : '') + ' · ' + status, r.w - 4), isProtected(sel.name) ? '32' : isBloat(sel.name) ? '33' : '2');
+      scr.put(r.x + 2, y + 2, pad('CPU ' + sel.pct.toFixed(1) + '% · RAM ' + fmtMem(sel.ws) + ' · ' + (tab.group ? 'total grup' : 'proses terpilih'), r.w - 4), '1');
+      if (h) { scr.put(r.x + 2, y + 3, 'Tren RAM ', '2'); scr.put(r.x + 11, y + 3, spark(h.v, r.w - 14), '36'); scr.put(r.x + 2, y + 4, pad('sekarang ' + Math.round(h.v[h.v.length - 1]) + ' MB · rentang ' + Math.round(Math.min(...h.v)) + '–' + Math.round(Math.max(...h.v)) + ' MB · ' + h.v.length + ' sampel', r.w - 4), '2'); }
       const ex = this.detail ? this.detail(sel, tab) : [];
-      ex.slice(0, Math.max(0, detH - 5)).forEach((l, i) => scr.put(r.x + 2, y + 4 + i, pad(l, r.w - 4), '2'));
+      ex.slice(0, Math.max(0, detH - 6)).forEach((l, i) => scr.put(r.x + 2, y + 5 + i, pad(l, r.w - 4), '2'));
     }
   },
   key(k, tab) {
