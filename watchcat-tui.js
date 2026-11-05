@@ -457,15 +457,55 @@ let prevRows = [], forceFull = true;
 function buildFrame(w, h) {
   const scr = new Screen(w, h);
   if (w < 70 || h < 18) { scr.put(1, 1, 'Terminal terlalu kecil (' + w + 'x' + h + '). Minimal 70x18. Perbesar jendela.', '33'); return scr; }
-  scr.fill(0, 0, w, 1, ' ', '30;47'); scr.put(1, 0, 'WatchCat', '1;30;46'); scr.put(10, 0, pad('F10 Menu │ n Tab baru │ w Tutup │ F1 Bantuan │ q Keluar', Math.max(0, w - 21)), '30;47'); scr.put(w - 9, 0, hhmmss(new Date()), '30;47');
-  scr.fill(0, 1, w, 1, ' ', '0;100'); let x = 0; const widths = S.tabs.map((_, i) => tabTitle(i).length + 4); let start = 0;
-  while (start < S.active && widths.slice(start, S.active + 1).reduce((a, b) => a + b, 0) > w - 2) start++;
-  for (let i = start; i < S.tabs.length && x < w; i++) { const label = ' ' + (i + 1) + ' ' + tabTitle(i) + ' '; scr.put(x, 1, label, i === S.active ? '1;30;46' : '37;100'); x += label.length + 1; }
+
+  // Header ringkas: identitas aplikasi + metrik yang tetap terbaca saat terminal dipersempit.
+  const cpuNow = S.cpu.length ? S.cpu[S.cpu.length - 1] : 0;
+  const ramNow = (1 - os.freemem() / os.totalmem()) * 100;
+  const procCount = S.procs.length;
+  scr.fill(0, 0, w, 1, ' ', '30;47');
+  scr.put(1, 0, ' WatchCat ', '1;30;46');
+  if (w >= 100) {
+    scr.put(12, 0, 'CPU ' + cpuNow.toFixed(0) + '%', cpuNow >= 85 ? '1;31;47' : '30;47');
+    scr.put(23, 0, 'RAM ' + ramNow.toFixed(0) + '%', ramNow >= 90 ? '1;31;47' : '30;47');
+    scr.put(34, 0, 'PROSES ' + procCount, '30;47');
+    scr.put(48, 0, adminCache === true ? 'ADMIN' : adminCache === false ? 'USER' : '…', '30;47');
+    scr.put(w - 9, 0, hhmmss(new Date()), '30;47');
+    scr.put(w - 25, 0, 'F10 Menu · F1 Bantuan', '30;47');
+  } else {
+    scr.put(12, 0, 'C:' + cpuNow.toFixed(0) + '%', cpuNow >= 85 ? '1;31;47' : '30;47');
+    scr.put(20, 0, 'R:' + ramNow.toFixed(0) + '%', ramNow >= 90 ? '1;31;47' : '30;47');
+    if (w >= 82) scr.put(29, 0, 'P:' + procCount, '30;47');
+    scr.put(w - 9, 0, hhmmss(new Date()), '30;47');
+  }
+
+  // Tab bar dengan penanda bila ada tab yang tersembunyi di kiri atau kanan.
+  scr.fill(0, 1, w, 1, ' ', '0;100');
+  let x = 0;
+  const widths = S.tabs.map((_, i) => (' ' + (i + 1) + ' ' + tabTitle(i) + ' ').length + 1);
+  let start = S.active;
+  while (start > 0 && widths.slice(start, S.active + 1).reduce((a, b) => a + b, 0) < w - 8) start--;
+  if (start > 0) { scr.put(0, 1, '‹', '1;36;100'); x = 2; }
+  let i = start;
+  for (; i < S.tabs.length; i++) {
+    const label = ' ' + (i + 1) + ' ' + tabTitle(i) + ' ';
+    const reserve = i < S.tabs.length - 1 ? 3 : 0;
+    if (x + label.length + reserve > w) break;
+    scr.put(x, 1, label, i === S.active ? '1;30;46' : '37;100');
+    x += label.length + 1;
+  }
+  if (i < S.tabs.length) scr.put(w - 2, 1, '›', '1;36;100');
+
   const tab = S.tabs[S.active], v = VIEWS[tab.type], r = { x: 0, y: 2, w, h: h - 3 };
   try { v.render(scr, r, tab); } catch (e) { scr.put(1, 3, 'Error tampilan: ' + e.message, '31'); }
-  scr.fill(0, h - 1, w, 1, ' ', '30;47'); scr.put(1, h - 1, pad(v.hints, w - 24), '30;47');
-  scr.put(w - 22, h - 1, pad((S.paused ? 'DIJEDA ' : '') + 'RAM kosong ' + fmtMem(os.freemem()), 21, 'r'), S.paused ? '1;31;47' : '30;47');
-  drawOverlay(scr); return scr;
+
+  // Footer memisahkan bantuan kontekstual dari status pemantauan.
+  scr.fill(0, h - 1, w, 1, ' ', '30;47');
+  scr.put(1, h - 1, pad(v.hints, Math.max(0, w - 34)), '30;47');
+  const live = S.paused ? 'JEDA' : S.polling ? 'MEMINDAI' : 'LIVE';
+  scr.put(w - 32, h - 1, pad(live, 9), S.paused ? '1;31;47' : S.polling ? '1;33;47' : '1;32;47');
+  scr.put(w - 22, h - 1, pad('RAM kosong ' + fmtMem(os.freemem()), 21, 'r'), '30;47');
+  drawOverlay(scr);
+  return scr;
 }
 function render() {
   const w = process.stdout.columns || 100, h = process.stdout.rows || 30, scr = buildFrame(w, h); let out = '';
