@@ -4,15 +4,15 @@
 module.exports = function (WC) {
   const { S, u, ui, IS_WIN, VIEWS, fs, path, cp, DATA_DIR } = WC;
   const { pad, fmtMem } = u;
-  const P = { parents: new Map(), lastParents: 0, loadingParents: false, detail: new Map(), want: null, loadingDetail: false, suspended: new Set() };
+  const P = { parents: new Map(), lastParents: 0, loadingParents: false, parentsErr: '', detail: new Map(), want: null, loadingDetail: false, suspended: new Set() };
   const parentsWanted = () => S.tabs.some((t) => t.type === 'procs' && t.tree);
 
   // ------------------------------------------------------------ induk proses (untuk pohon)
   function fetchParents() {
     if (P.loadingParents) return; P.loadingParents = true;
-    const done = (out) => { for (const l of out.split(/\r?\n/)) { const m = l.trim().match(/^(\d+)[|\s]+(\d+)$/); if (m) P.parents.set(+m[1], +m[2]); } P.lastParents = Date.now(); P.loadingParents = false; };
-    if (IS_WIN) WC.runPS('Get-CimInstance Win32_Process | ForEach-Object { "{0}|{1}" -f $_.ProcessId, $_.ParentProcessId }', (e, out) => done(e ? '' : out), 30000);
-    else cp.execFile('ps', ['-eo', 'pid=,ppid='], (e, out) => done(e ? '' : String(out)));
+    const done = (out, err) => { if (!err) { for (const l of out.split(/\r?\n/)) { const m = l.trim().match(/^(\d+)[|\s]+(\d+)$/); if (m) P.parents.set(+m[1], +m[2]); } P.lastParents = Date.now(); P.parentsErr = ''; } else P.parentsErr = String(err.message || err).split('\n')[0]; P.loadingParents = false; };
+    if (IS_WIN) WC.runPS('Get-CimInstance Win32_Process | ForEach-Object { "{0}|{1}" -f $_.ProcessId, $_.ParentProcessId }', (e, out) => done(out || '', e), 30000);
+    else cp.execFile('ps', ['-eo', 'pid=,ppid='], (e, out) => done(String(out || ''), e));
   }
 
   function treeRows(rows) {
@@ -85,7 +85,7 @@ module.exports = function (WC) {
   };
   PV.detail = function (sel) {
     const pid = sel.pids[0]; P.want = { pid, since: P.want && P.want.pid === pid ? P.want.since : Date.now() };
-    const d = P.detail.get(pid); if (!d) return ['Memuat detail…'];
+    const d = P.detail.get(pid); if (!d) return [P.loadingDetail ? 'Memuat detail proses…' : 'Detail belum tersedia · pilih proses lagi untuk mencoba'];
     if (d.err) return ['Detail tidak tersedia: ' + d.err];
     const par = S.procs.find((p) => p.pid === d.ppid);
     return ['Path : ' + (d.path || '(tidak terbaca)') + (sel.pids.length > 1 ? '   [PID ' + pid + ' dari ' + sel.pids.length + ' proses]' : ''), 'Cmd  : ' + (d.cmd || '-'),
@@ -152,27 +152,30 @@ module.exports = function (WC) {
 
   const modeShow = { svc: 'saran', all: 'semua', run: 'berjalan' };
   WC.addView('services', {
-    title: 'Layanan', hints: '↑↓ · d nonaktifkan · s hentikan · m manual · a otomatis · u batalkan · f filter · r muat ulang',
-    init() { return { filter: 'svc' }; },
+    title: 'Layanan', hints: '↑↓ · f jenis · / cari · Esc reset · d nonaktifkan · s hentikan · m manual · a otomatis · u batalkan · r muat ulang',
+    init() { return { filter: 'svc', query: '' }; },
     rows(tab) {
       let rows = SV.rows.slice();
       if (tab.filter === 'svc') rows = rows.filter((x) => x.hint); else if (tab.filter === 'run') rows = rows.filter((x) => x.state === 'Running');
+      if (tab.query) { const q = tab.query.toLowerCase(); rows = rows.filter((x) => (x.name + ' ' + x.disp + ' ' + x.hint).toLowerCase().includes(q)); }
       return rows.sort((a, b) => (!!b.hint - !!a.hint) || a.name.localeCompare(b.name));
     },
     render(scr, r, tab) {
       if (!SV.at && !SV.loading) loadServices(); else if (Date.now() - SV.at > 60000 && S.tabs[S.active] === tab) loadServices();
       const rows = this.rows(tab);
-      scr.put(r.x, r.y, pad(' ' + SV.rows.length + ' layanan · tampil: ' + modeShow[tab.filter] + ' (' + rows.length + ') · ' + (WC.isAdmin() ? 'administrator: bisa mengubah' : 'BUKAN administrator: hanya lihat (jalankan WatchCat-Admin untuk mengubah)') + (SV.loading ? ' · memuat…' : '') + (SV.err ? ' · ! ' + SV.err : ''), r.w), WC.isAdmin() ? '2' : '33');
+      scr.put(r.x, r.y, pad(' ' + SV.rows.length + ' layanan · tampil: ' + modeShow[tab.filter] + ' (' + rows.length + ')' + (tab.query ? ' · cari: ' + tab.query : '') + ' · ' + (WC.isAdmin() ? 'admin: bisa mengubah' : 'hanya lihat · jalankan WatchCat-Admin untuk mengubah') + (SV.loading ? ' · memuat…' : '') + (SV.err ? ' · ! ' + SV.err : ''), r.w), WC.isAdmin() ? '2' : '33');
       const cols = [{ t: 'Nama', w: 26, f: (x) => (x.critical ? '* ' : '') + x.name }, { t: 'Status', w: 9, f: (x) => x.state, style: (x) => (x.state === 'Running' ? '32' : '2') }, { t: 'Mulai', w: 9, f: (x) => x.mode },
         { t: 'Keterangan', flex: true, f: (x) => (x.hint ? '⚠ ' + x.hint : x.critical ? 'dilindungi (penting untuk sistem)' : x.disp), style: (x) => (x.hint ? '33' : '0') }];
       const sel = ui.drawTable(scr, r.x, r.y + 1, r.w, r.h - 1, cols, rows, tab.selKey, (x) => x.k, tab, (x) => (x.critical ? '2' : '0'));
       if (sel && !tab.selKey) tab.selKey = sel.k;
-      if (!rows.length) scr.put(r.x + 2, r.y + 3, SV.loading ? 'Memuat daftar layanan…' : 'Tidak ada layanan pada filter ini (tekan f).', '2');
+      if (!rows.length) scr.put(r.x + 2, r.y + 3, SV.loading ? 'Memuat daftar layanan…' : SV.err ? 'Data layanan gagal dimuat. Tekan r untuk mencoba lagi.' : tab.query ? 'Tidak ada layanan cocok. Esc untuk hapus pencarian.' : 'Tidak ada layanan pada filter ini (tekan f).', SV.err ? '33' : '2');
     },
     key(k, tab) {
       const rows = this.rows(tab), cur = rows.find((x) => x.k === tab.selKey) || rows[0];
       if (ui.listKey(tab, rows, k, (x) => x.k)) return true;
       if (k.name === 'f') { tab.filter = { svc: 'all', all: 'run', run: 'svc' }[tab.filter]; tab.selKey = null; return true; }
+      if (k.str === '/') { WC.input('Cari layanan Windows', tab.query, (v) => { tab.query = v.trim(); tab.selKey = null; }); return true; }
+      if (k.name === 'escape' && tab.query) { tab.query = ''; tab.selKey = null; return true; }
       if (k.name === 'r') { SV.at = 0; loadServices(); return true; }
       if (k.name === 'u') { WC.confirm(['Batalkan perubahan layanan terakhir?', 'Mode mulai (dan status jalan) dikembalikan seperti sebelum diubah.'], undoService); return true; }
       if (!cur) return false;

@@ -96,11 +96,13 @@ module.exports = function (WC) {
   }
   function scan() {
     if (A.scanning) return; A.scanning = true; extra = Array.isArray(WC.CFG.scanExtra) ? WC.CFG.scanExtra.filter((e) => Array.isArray(e) && e.length >= 4) : [];
-    if (!IS_WIN) { finish(evaluate(fakeData()), ''); return; }
-    WC.runPS(SCAN_PS, (e, out) => {
+    try {
+      if (!IS_WIN) { finish(evaluate(fakeData()), ''); return; }
+      WC.runPS(SCAN_PS, (e, out) => {
       if (e && !out) return finish(null, e.message.split('\n')[0]);
       try { finish(evaluate(JSON.parse(out.trim()))); } catch (x) { finish(null, 'hasil pindai tidak terbaca'); }
-    }, 120000);
+      }, 120000);
+    } catch (x) { finish(null, x.message || 'gagal memulai scan'); }
   }
 
   // ------------------------------------------------------------ aksi
@@ -145,22 +147,24 @@ module.exports = function (WC) {
 
   const RISK = { aman: '32', cek: '33' };
   WC.addView('scan', {
-    title: 'Scan', hints: '↑↓ · Enter detail · s pindai · k kill · K kill semua yang aman · d matikan startup · u uninstall',
-    init() { return {}; },
-    rows() { return A.items.map((i) => Object.assign(i, { k: i.id })); },
+    title: 'Scan', hints: '↑↓ · / cari · Esc reset · s pindai · Enter detail · k hentikan · d startup · u uninstall',
+    init() { return { query: '' }; },
+    rows(tab) { let rows = A.items.map((i) => Object.assign(i, { k: i.id })); if (tab.query) { const q = tab.query.toLowerCase(); rows = rows.filter((i) => (i.name + ' ' + i.kind + ' ' + i.note).toLowerCase().includes(q)); } return rows; },
     render(scr, r, tab) {
       if (S.selftest && !A.at) { S.startup = [{ scope: 'HKCU', key: 'HKCU\\x', name: 'OneDrive', value: '"C:\\Users\\Demo\\AppData\\Local\\Microsoft\\OneDrive\\OneDrive.exe" /background' }]; scan(); }
-      const rows = this.rows(tab);
-      scr.put(r.x, r.y, pad(' ' + (A.scanning ? 'Memindai aplikasi terpasang… (10-30 dtk)' : A.err ? '! ' + A.err + ' · tekan s untuk ulangi' : A.at ? A.sum + ' · pindai ' + u.hhmmss(new Date(A.at)) : 'Belum dipindai · tekan s') + (IS_WIN ? '' : ' · [data contoh, bukan Windows]'), r.w), A.err ? '33' : '2');
+      const rows = this.rows(tab), safe = A.items.filter((i) => i.risk === 'aman').length, review = A.items.filter((i) => i.risk === 'cek').length;
+      scr.put(r.x, r.y, pad(' ' + (A.scanning ? 'Memindai aplikasi terpasang… (10-30 dtk)' : A.err ? '! ' + A.err + ' · tekan s untuk ulangi' : A.at ? A.items.length + ' temuan · ' + safe + ' aman · ' + review + ' perlu cek · ' + u.hhmmss(new Date(A.at)) : 'Belum dipindai · tekan s') + (tab.query ? ' · cari: ' + tab.query : '') + (IS_WIN ? '' : ' · [data contoh, bukan Windows]'), r.w), A.err ? '33' : A.scanning ? '36' : '2');
       const cols = [{ t: 'Risiko', w: 7, f: (x) => x.risk, style: (x) => RISK[x.risk] }, { t: 'Jenis', w: 6, f: (x) => x.kind }, { t: 'Nama', w: 32, f: (x) => x.name },
         { t: 'Jalan', w: 16, f: (x) => (x.pids.length ? x.pids.length + ' proses · ' + fmtMem(x.mem) : '-'), style: (x) => (x.pids.length ? '1;31' : '2') }, { t: 'Start', w: 5, a: 'r', f: (x) => (x.startup.length ? x.startup.length : '-') }, { t: 'Catatan', flex: true, f: (x) => x.note }];
       const sel = ui.drawTable(scr, r.x, r.y + 1, r.w, r.h - 1, cols, rows, tab.selKey, (x) => x.k, tab);
       if (sel && !tab.selKey) tab.selKey = sel.k;
-      if (!rows.length && !A.scanning) scr.put(r.x + 2, r.y + 3, A.at ? 'Tidak ada bloatware yang dikenal. Tambahkan pola sendiri di config (scanExtra).' : 'Tekan s untuk memindai.', A.at ? '32' : '2');
+      if (!rows.length) scr.put(r.x + 2, r.y + 3, A.scanning ? 'Memindai aplikasi dan menghubungkan proses…' : A.err ? 'Scan gagal. Tekan s untuk mencoba lagi.' : tab.query ? 'Tidak ada hasil cocok. Esc untuk hapus pencarian.' : A.at ? 'Tidak ada aplikasi yang cocok dengan database bloatware.' : 'Belum ada hasil. Tekan s untuk memulai scan.', A.err ? '33' : '2');
     },
     key(k, tab) {
       const rows = this.rows(tab), cur = rows.find((x) => x.k === tab.selKey) || rows[0];
       if (ui.listKey(tab, rows, k, (x) => x.k)) return true;
+      if (k.str === '/') { WC.input('Cari hasil scan', tab.query, (v) => { tab.query = v.trim(); tab.selKey = null; }); return true; }
+      if (k.name === 'escape' && tab.query) { tab.query = ''; tab.selKey = null; return true; }
       if (k.name === 's') { A.at = 0; scan(); return true; }
       if (!cur) return false;
       if (k.name === 'return') { detail(cur); return true; }

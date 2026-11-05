@@ -64,7 +64,7 @@ const S = {
   tabs: [], active: 0, overlay: null, paused: false, procInterval: 3000, autoKill: false,
   cpu: [], ram: [], cores: [], prevCpu: null,
   procs: [], groups: [], hist: new Map(), prevProc: new Map(), polling: false, procErr: '', lastPoll: 0,
-  startup: [], backup: [], log: [], cooldown: new Map(), flagged: new Set(),
+  startup: [], backup: [], startupLoading: false, startupErr: '', log: [], cooldown: new Map(), flagged: new Set(),
 };
 
 function logLine(level, msg) {
@@ -183,14 +183,19 @@ function readBackup() {
   return out;
 }
 async function refreshStartup() {
-  let rows;
-  if (IS_WIN) rows = (await Promise.all(RUN_KEYS.map(regQuery))).flat();
-  else rows = S.demoStartup || (S.demoStartup = [{ scope: 'HKCU', key: 'HKCU\\...\\Run', name: 'MicrosoftEdgeAutoLaunch_DEMO', value: '"msedge.exe" --no-startup-window' }, { scope: 'HKCU', key: 'HKCU\\...\\Run', name: 'OneDrive', value: '"OneDrive.exe" /background' }, { scope: 'HKLM', key: 'HKLM\\...\\Run', name: 'SecurityHealth', value: 'SecurityHealthSystray.exe' }]);
-  rows.forEach((r) => { r.bloat = matchAny(r.name, CFG.rBlock); });
-  S.startup = rows;
-  const active = new Set(rows.map((r) => r.key + '|' + r.name));
-  const seen = new Set(); S.backup = readBackup().filter((r) => { const id = r.key + '|' + r.name; if (active.has(id) || seen.has(id)) return false; seen.add(id); return true; });
-  emit('startup');
+  if (S.startupLoading) return;
+  S.startupLoading = true; S.startupErr = '';
+  try {
+    let rows;
+    if (IS_WIN) rows = (await Promise.all(RUN_KEYS.map(regQuery))).flat();
+    else rows = S.demoStartup || (S.demoStartup = [{ scope: 'HKCU', key: 'HKCU\\...\\Run', name: 'MicrosoftEdgeAutoLaunch_DEMO', value: '"msedge.exe" --no-startup-window' }, { scope: 'HKCU', key: 'HKCU\\...\\Run', name: 'OneDrive', value: '"OneDrive.exe" /background' }, { scope: 'HKLM', key: 'HKLM\\...\\Run', name: 'SecurityHealth', value: 'SecurityHealthSystray.exe' }]);
+    rows.forEach((r) => { r.bloat = matchAny(r.name, CFG.rBlock); });
+    S.startup = rows;
+    const active = new Set(rows.map((r) => r.key + '|' + r.name));
+    const seen = new Set(); S.backup = readBackup().filter((r) => { const id = r.key + '|' + r.name; if (active.has(id) || seen.has(id)) return false; seen.add(id); return true; });
+    emit('startup');
+  } catch (e) { S.startupErr = String(e.message || e).split('\\n')[0]; logLine('WARN', 'Gagal memuat startup: ' + S.startupErr); }
+  finally { S.startupLoading = false; }
 }
 function removeStartup(e) {
   try { fs.mkdirSync(DATA_DIR, { recursive: true }); fs.appendFileSync(BACKUP_FILE, JSON.stringify({ time: new Date().toISOString(), key: e.key, name: e.name, value: e.value }) + '\n'); } catch (x) { logLine('WARN', 'Cadangan gagal ditulis: ' + x.message); return; }
@@ -259,6 +264,15 @@ function listKey(tab, rows, k, rowKey) {
   tab.selKey = rowKey(rows[clamp(ni, 0, n - 1)]); return true;
 }
 
+// Daftar alamat antarmuka jaringan dari API bawaan Node.js (tanpa akses admin).
+function getNetworkRows() {
+  const rows = [];
+  for (const [name, list] of Object.entries(os.networkInterfaces())) {
+    for (const n of (list || [])) rows.push({ name, address: n.address, family: n.family, internal: !!n.internal, mac: n.mac || '—', cidr: n.cidr || '—' });
+  }
+  return rows.sort((a, b) => a.name.localeCompare(b.name) || a.family.localeCompare(b.family));
+}
+
 // ------------------------------------------------------------------ tampilan (view)
 const VIEWS = {};
 
@@ -275,11 +289,16 @@ VIEWS.dashboard = {
     const bw2 = clamp(iw - 34, 4, 20), used = 1 - os.freemem() / os.totalmem(); L('RAM     ' + bar(used, bw2) + ' ' + pad((used * 100).toFixed(0) + '%', 4, 'r') + '  kosong ' + fmtMem(os.freemem()), colorFor(used * 100));
     try { const d = fs.statfsSync(IS_WIN ? 'C:\\' : '/'), tot = d.blocks * d.bsize, fr = d.bavail * d.bsize; L('Disk    ' + bar(1 - fr / tot, bw2) + ' ' + pad(((1 - fr / tot) * 100).toFixed(0) + '%', 4, 'r') + '  kosong ' + fmtMem(fr), colorFor((1 - fr / tot) * 100)); } catch (e) { L('Disk    (tidak terbaca)', '2'); }
     scr.put(r.x + 2, ly, pad('Core    ', 8), '0'); S.cores.slice(0, iw - 9).forEach((c, i) => scr.put(r.x + 10 + i, ly, BLOCKS[clamp(1 + Math.round(c / 100 * 7), 1, 8)], colorFor(c))); ly++;
+    const netRows = getNetworkRows(), ipv4 = netRows.filter((n) => n.family === 'IPv4' && !n.internal);
+    L('Jaringan ' + netRows.length + ' alamat · ' + (ipv4.length ? ipv4.slice(0, 2).map((n) => n.address).join(', ') : 'tidak terhubung'), ipv4.length ? '36' : '2');
     L('Proses  ' + S.procs.length + ' jalan · pantau tiap ' + S.procInterval / 1000 + 'dtk' + (S.paused ? ' · DIJEDA' : '') + (S.autoKill ? ' · auto-bloat ON' : ''), S.paused ? '33' : '0');
     const leaks = S.flagged.size; if (S.procErr) L('! ' + S.procErr, '31'); else if (os.freemem() / os.totalmem() < 0.1) L('! RAM hampir habis', '1;31'); else if (leaks) L('! ' + leaks + ' proses dicurigai memory leak (tab Memori)', '1;33'); else L('Semua normal', '32');
-    const rw = r.w - bw, rows = [...S.groups].sort((a, b) => b.ws - a.ws).slice(0, sysH - 2), mx = rows.length ? rows[0].ws : 1, nw = 20;
-    scr.box(r.x + bw, y, rw, sysH, '36', 'Pemakai RAM terbesar');
-    rows.forEach((g, i) => scr.put(r.x + bw + 2, y + 1 + i, pad(g.name, nw) + pad(fmtMem(g.ws), 9, 'r') + ' ' + bar(g.ws / mx, Math.max(2, rw - 4 - nw - 10)), i === 0 ? '33' : '0'));
+    const rw = r.w - bw, rows = [...S.groups].sort((a, b) => b.ws - a.ws).slice(0, sysH - 2), mx = rows.length ? rows[0].ws : 1, nw = 17;
+    scr.box(r.x + bw, y, rw, sysH, '36', 'Pemakai resource terbesar');
+    rows.forEach((g, i) => {
+      const label = pad(g.name, nw) + pad(fmtMem(g.ws), 8, 'r') + pad(g.pct.toFixed(0) + '%', 5, 'r');
+      scr.put(r.x + bw + 2, y + 1 + i, label + ' ' + bar(g.ws / mx, Math.max(2, rw - 4 - nw - 15)), i === 0 ? '33' : '0');
+    });
   },
   key() { return false; },
 };
@@ -295,17 +314,28 @@ VIEWS.procs = {
   },
   render(scr, r, tab) {
     const rows = this.rows(tab), mx = Math.max(1, ...rows.map((x) => x.ws)), detH = r.h >= 22 ? 9 : (r.h >= 16 ? 6 : 0);
-    scr.put(r.x, r.y, pad(' Urut: ' + { mem: 'memori', cpu: 'CPU', name: 'nama' }[tab.sort] + ' · ' + (tab.group ? 'per nama' : 'per PID') + ' · * = dilindungi, kuning = bloatware' + (tab.filter ? ' · cari: "' + tab.filter + '"' : '') + (S.procErr ? ' · ! ' + S.procErr : ''), r.w), '2');
+    const age = S.lastPoll ? Math.max(0, Math.floor((Date.now() - S.lastPoll) / 1000)) : null;
+    const summary = rows.length + ' entri' + (tab.group ? ' · dikelompokkan' : ' · per PID') + ' · urut ' + { mem: 'memori', cpu: 'CPU', name: 'nama' }[tab.sort]
+      + (age === null ? ' · menunggu data' : ' · diperbarui ' + age + ' dtk lalu')
+      + (tab.filter ? ' · filter: "' + tab.filter + '"' : '') + (S.procErr ? ' · ! ' + S.procErr : '');
+    scr.put(r.x, r.y, pad(' ' + summary, r.w), S.procErr ? '33' : '2');
     const cols = [{ t: 'Nama', w: 26, f: (x) => (x.disp || x.name) + (isProtected(x.name) ? ' *' : '') }, { t: tab.group ? 'Jml' : 'PID', w: 6, a: 'r', f: (x) => x.n }, { t: 'CPU%', w: 6, a: 'r', f: (x) => x.pct.toFixed(1), style: (x) => colorFor(x.pct * 2) },
       { t: 'Memori', w: 10, a: 'r', f: (x) => fmtMem(x.ws) }, { t: '', flex: true, f: (x, w) => bar(x.ws / mx, w), style: () => '34' }];
     const sel = drawTable(scr, r.x, r.y + 1, r.w, r.h - 1 - detH, cols, rows, tab.selKey, (x) => x.k, tab, (x) => (isBloat(x.name) ? '33' : '0'));
+    if (!rows.length) {
+      const msg = tab.filter ? 'Tidak ada proses yang cocok. Tekan Esc untuk menghapus filter.' : (S.procErr ? 'Data proses belum tersedia. Tekan r untuk mencoba lagi.' : 'Menunggu daftar proses pertama…');
+      scr.put(r.x + 2, r.y + 3, pad(msg, r.w - 4), '2');
+    }
     if (sel && !tab.selKey) tab.selKey = sel.k;
     if (detH && sel) {
-      const h = S.hist.get(sel.name.toLowerCase()), y = r.y + r.h - detH; scr.box(r.x, y, r.w, detH, '36', 'Detail: ' + sel.name);
-      scr.put(r.x + 2, y + 1, pad(sel.pids.length + ' proses · PID ' + sel.pids.slice(0, 6).join(', ') + (sel.pids.length > 6 ? ' …' : '') + (isProtected(sel.name) ? ' · DILINDUNGI' : isBloat(sel.name) ? ' · bloatware' : ''), r.w - 4));
-      if (h) { scr.put(r.x + 2, y + 2, 'Memori ', '2'); scr.put(r.x + 9, y + 2, spark(h.v, r.w - 12), '36'); scr.put(r.x + 2, y + 3, pad('sekarang ' + Math.round(h.v[h.v.length - 1]) + ' MB · rentang ' + Math.round(Math.min(...h.v)) + '–' + Math.round(Math.max(...h.v)) + ' MB (' + h.v.length + ' sampel)', r.w - 4), '2'); }
+      const h = S.hist.get(sel.name.toLowerCase()), y = r.y + r.h - detH;
+      scr.box(r.x, y, r.w, detH, '36', 'Ringkasan proses: ' + sel.name);
+      const status = isProtected(sel.name) ? 'DILINDUNGI' : isBloat(sel.name) ? 'BLOATWARE' : 'NORMAL';
+      scr.put(r.x + 2, y + 1, pad(sel.pids.length + ' proses · PID ' + sel.pids.slice(0, 6).join(', ') + (sel.pids.length > 6 ? ' …' : '') + ' · ' + status, r.w - 4), isProtected(sel.name) ? '32' : isBloat(sel.name) ? '33' : '2');
+      scr.put(r.x + 2, y + 2, pad('CPU ' + sel.pct.toFixed(1) + '% · RAM ' + fmtMem(sel.ws) + ' · ' + (tab.group ? 'total grup' : 'proses terpilih'), r.w - 4), '1');
+      if (h) { scr.put(r.x + 2, y + 3, 'Tren RAM ', '2'); scr.put(r.x + 11, y + 3, spark(h.v, r.w - 14), '36'); scr.put(r.x + 2, y + 4, pad('sekarang ' + Math.round(h.v[h.v.length - 1]) + ' MB · rentang ' + Math.round(Math.min(...h.v)) + '–' + Math.round(Math.max(...h.v)) + ' MB · ' + h.v.length + ' sampel', r.w - 4), '2'); }
       const ex = this.detail ? this.detail(sel, tab) : [];
-      ex.slice(0, Math.max(0, detH - 5)).forEach((l, i) => scr.put(r.x + 2, y + 4 + i, pad(l, r.w - 4), '2'));
+      ex.slice(0, Math.max(0, detH - 6)).forEach((l, i) => scr.put(r.x + 2, y + 5 + i, pad(l, r.w - 4), '2'));
     }
   },
   key(k, tab) {
@@ -329,12 +359,12 @@ VIEWS.startup = {
   rows() { return [...S.startup.map((e) => ({ k: 'a|' + e.key + '|' + e.name, kind: 'aktif', e })), ...S.backup.map((e) => ({ k: 'b|' + e.key + '|' + e.name, kind: 'cadangan', e }))]; },
   render(scr, r, tab) {
     const rows = this.rows();
-    scr.put(r.x, r.y, pad(' Aktif: ' + S.startup.length + ' · Dicadangkan (sudah dihapus, bisa dipulihkan): ' + S.backup.length + (IS_WIN ? '' : ' · [mode demo, bukan Windows]'), r.w), '2');
+    scr.put(r.x, r.y, pad(' ' + (S.startupLoading ? 'Memuat data startup…' : S.startupErr ? 'Gagal memuat: ' + S.startupErr + ' · tekan r untuk ulangi' : 'Aktif: ' + S.startup.length + ' · cadangan: ' + S.backup.length) + (IS_WIN ? '' : ' · [mode demo, bukan Windows]'), r.w), S.startupErr ? '33' : S.startupLoading ? '36' : '2');
     const cols = [{ t: 'Status', w: 10, f: (x) => (x.kind === 'cadangan' ? 'dihapus' : x.e.bloat ? 'bloat' : 'aktif'), style: (x) => (x.kind === 'cadangan' ? '2' : x.e.bloat ? '33' : '32') },
       { t: 'Lokasi', w: 7, f: (x) => x.e.scope || (x.e.key.startsWith('HKLM') ? 'HKLM' : 'HKCU') }, { t: 'Nama', w: 34, f: (x) => x.e.name }, { t: 'Perintah', flex: true, f: (x) => x.e.value }];
     const sel = drawTable(scr, r.x, r.y + 1, r.w, r.h - 1, cols, rows, tab.selKey, (x) => x.k, tab, (x) => (x.kind === 'cadangan' ? '2' : '0'));
     if (sel && !tab.selKey) tab.selKey = sel.k;
-    if (!rows.length) scr.put(r.x + 2, r.y + 3, 'Tidak ada entri autostart.', '2');
+    if (!rows.length) scr.put(r.x + 2, r.y + 3, S.startupLoading ? 'Sedang membaca registry startup…' : S.startupErr ? 'Data belum tersedia. Tekan r untuk mencoba lagi.' : 'Tidak ada entri autostart atau cadangan.', S.startupErr ? '33' : '2');
   },
   key(k, tab) {
     const rows = this.rows(), cur = rows.find((x) => x.k === tab.selKey) || rows[0];
@@ -348,27 +378,30 @@ VIEWS.startup = {
 };
 
 VIEWS.memory = {
-  title: 'Memori', hints: '↑↓ pilih · s urut (tumbuh/ukuran) · pilih proses beda di tiap tab',
-  init() { return { sort: 'grow' }; },
+  title: 'Memori', hints: '↑↓ pilih · s urut · / cari · Esc hapus pencarian',
+  init() { return { sort: 'grow', query: '' }; },
   rows(tab) {
-    const rows = S.groups.filter((g) => !matchAny(g.key, CFG.rLeak) || S.hist.get(g.key)).map((g) => { const a = analyzeLeak(g.key); return { k: g.key, name: g.name, mb: g.priv / 1048576, a }; });
+    let rows = S.groups.filter((g) => !matchAny(g.key, CFG.rLeak) || S.hist.get(g.key)).map((g) => { const a = analyzeLeak(g.key); return { k: g.key, name: g.name, mb: g.priv / 1048576, a }; });
+    if (tab.query) rows = rows.filter((x) => x.name.toLowerCase().includes(tab.query.toLowerCase()));
     return rows.sort(tab.sort === 'grow' ? (x, y) => (y.a.flag - x.a.flag) || (y.a.slope - x.a.slope) : (x, y) => y.mb - x.mb);
   },
   render(scr, r, tab) {
-    const rows = this.rows(tab), chH = r.h >= 18 ? 9 : 0;
-    scr.put(r.x, r.y, pad(' Urut: ' + (tab.sort === 'grow' ? 'laju naik' : 'ukuran') + ' · ⚠ = memori naik terus (dugaan leak, bukan kepastian)', r.w), '2');
+    const rows = this.rows(tab), chH = r.h >= 18 ? 9 : 0, flagged = rows.filter((x) => x.a.flag).length;
+    const tracked = rows.reduce((n, x) => n + x.mb, 0);
+    scr.put(r.x, r.y, pad(' ' + rows.length + ' proses · ' + Math.round(tracked) + ' MB terpantau · ' + flagged + ' dugaan leak · urut ' + (tab.sort === 'grow' ? 'tren naik' : 'ukuran') + (tab.query ? ' · cari: ' + tab.query : '') + ' · ⚠ bukan kepastian', r.w), flagged ? '33' : '2');
     const cols = [{ t: '', w: 2, f: (x) => (x.a.flag ? '⚠' : ' '), style: () => '1;31' }, { t: 'Nama', w: 26, f: (x) => x.name }, { t: 'Memori', w: 10, a: 'r', f: (x) => Math.round(x.mb) + ' MB' },
       { t: 'Naik', w: 10, a: 'r', f: (x) => (x.a.n < 6 ? '…' : (x.a.growth >= 0 ? '+' : '') + Math.round(x.a.growth) + ' MB'), style: (x) => (x.a.flag ? '31' : x.a.growth > 40 ? '33' : '0') },
       { t: 'MB/menit', w: 9, a: 'r', f: (x) => (x.a.n < 6 ? '…' : x.a.slope.toFixed(1)) }, { t: 'Tren', flex: true, f: (x, w) => { const h = S.hist.get(x.k); return h ? spark(h.v, w) : ''; }, style: () => '36' }];
     const sel = drawTable(scr, r.x, r.y + 1, r.w, r.h - 1 - chH, cols, rows, tab.selKey, (x) => x.k, tab, (x) => (x.a.flag ? '31' : '0'));
     if (sel && !tab.selKey) tab.selKey = sel.k;
+    if (!rows.length) scr.put(r.x + 2, r.y + 3, tab.query ? 'Tidak ada proses cocok. Esc untuk hapus pencarian.' : 'Belum ada data proses. Tunggu satu siklus pemantauan.', '2');
     if (chH && sel) {
       const h = S.hist.get(sel.k), y = r.y + r.h - chH; if (!h || h.v.length < 2) { scr.box(r.x, y, r.w, chH, '36', 'Grafik: ' + sel.name); scr.put(r.x + 2, y + 2, 'Mengumpulkan data…', '2'); return; }
       const lo = Math.min(...h.v), hi = Math.max(...h.v), span = Math.max(hi - lo, 10), mins = (h.t[h.t.length - 1] - h.t[0]) / 60000;
       chartBox(scr, r.x, y, r.w, chH, 'Grafik: ' + sel.name + ' · ' + mins.toFixed(1) + ' menit terakhir', h.v, { top: Math.round(lo + span) + 'MB', bottom: Math.round(lo) + 'MB', lo, span, style: () => (sel.a.flag ? '31' : '36') });
     }
   },
-  key(k, tab) { const rows = this.rows(tab); if (listKey(tab, rows, k, (x) => x.k)) return true; if (k.name === 's') { tab.sort = tab.sort === 'grow' ? 'size' : 'grow'; return true; } return false; },
+  key(k, tab) { const rows = this.rows(tab); if (listKey(tab, rows, k, (x) => x.k)) return true; if (k.name === 's') { tab.sort = tab.sort === 'grow' ? 'size' : 'grow'; return true; } if (k.str === '/') { S.overlay = { type: 'input', title: 'Cari proses memori', value: tab.query, done: (v) => { tab.query = v.trim(); tab.selKey = null; } }; return true; } if (k.name === 'escape' && tab.query) { tab.query = ''; tab.selKey = null; return true; } return false; },
 };
 
 VIEWS.bloat = {
@@ -398,16 +431,20 @@ VIEWS.bloat = {
 };
 
 VIEWS.log = {
-  title: 'Log', hints: '↑↓ gulir · End ke terbaru',
-  init() { return { off: 0 }; },
+  title: 'Log', hints: '↑↓ gulir · f filter level · / cari · Esc reset · End terbaru',
+  init() { return { off: 0, level: 'ALL', query: '' }; },
+  rows(tab) { return S.log.filter((e) => (tab.level === 'ALL' || e.level === tab.level) && (!tab.query || (e.level + ' ' + e.msg).toLowerCase().includes(tab.query.toLowerCase()))); },
   render(scr, r, tab) {
-    const n = r.h - 1, total = S.log.length; tab.off = clamp(tab.off, 0, Math.max(0, total - n)); const end = total - tab.off, start = Math.max(0, end - n);
-    scr.put(r.x, r.y, pad(' ' + total + ' entri · file: ' + LOG_FILE, r.w), '2');
-    S.log.slice(start, end).forEach((e, i) => { const st = { ACTION: '32', WARN: '33', ALERT: '1;33', INFO: '0' }[e.level] || '0'; scr.put(r.x + 1, r.y + 1 + i, pad(hhmmss(e.t) + ' ' + pad(e.level, 7) + e.msg, r.w - 2), st); });
-    if (!total) scr.put(r.x + 2, r.y + 2, 'Belum ada aktivitas.', '2');
+    const rows = this.rows(tab), n = r.h - 1, total = rows.length; tab.off = clamp(tab.off, 0, Math.max(0, total - n)); const end = total - tab.off, start = Math.max(0, end - n);
+    scr.put(r.x, r.y, pad(' ' + total + '/' + S.log.length + ' entri · level ' + tab.level + (tab.query ? ' · cari: ' + tab.query : '') + ' · ' + LOG_FILE, r.w), '2');
+    rows.slice(start, end).forEach((e, i) => { const st = { ACTION: '32', WARN: '33', ALERT: '1;33', INFO: '0' }[e.level] || '0'; scr.put(r.x + 1, r.y + 1 + i, pad(hhmmss(e.t) + ' ' + pad(e.level, 7) + e.msg, r.w - 2), st); });
+    if (!total) scr.put(r.x + 2, r.y + 2, S.log.length ? 'Tidak ada log yang cocok dengan filter.' : 'Belum ada aktivitas.', '2');
   },
   key(k, tab) {
     const pg = (tab.page = 10);
+    if (k.name === 'f') { tab.level = ({ ALL: 'WARN', WARN: 'ACTION', ACTION: 'ALERT', ALERT: 'INFO', INFO: 'ALL' })[tab.level]; tab.off = 0; return true; }
+    if (k.str === '/') { S.overlay = { type: 'input', title: 'Cari log', value: tab.query, done: (v) => { tab.query = v.trim(); tab.off = 0; } }; return true; }
+    if (k.name === 'escape' && (tab.query || tab.level !== 'ALL')) { tab.query = ''; tab.level = 'ALL'; tab.off = 0; return true; }
     if (k.name === 'up') tab.off++; else if (k.name === 'down') tab.off--; else if (k.name === 'pageup') tab.off += pg; else if (k.name === 'pagedown') tab.off -= pg; else if (k.name === 'end') tab.off = 0; else if (k.name === 'home') tab.off = 1e9; else return false;
     return true;
   },
@@ -432,7 +469,7 @@ function openHelp() { S.overlay = { type: 'help' }; }
 function cycleInterval(d) { const L = [2000, 3000, 5000, 10000]; S.procInterval = L[clamp(L.indexOf(S.procInterval) + d, 0, L.length - 1)] || 3000; if (d > 0 && S.procInterval === 10000 && L.indexOf(S.procInterval) === L.length - 1) { /* batas atas */ } }
 function refreshAll() { pollProcs(); refreshStartup(); }
 
-const HELP = ['WatchCat TUI v' + VERSION, '', 'Tab        ← →  /  Tab  /  1-9      pindah tab', 'Tab baru   n      pilih fitur; satu fitur boleh dibuka di banyak tab', 'Tutup tab  w', 'Menu       F10  atau  m', 'Segarkan   r        Jeda  p        Interval  + / -', 'Daftar     ↑ ↓  PgUp PgDn  Home End', 'Keluar     q  atau  Ctrl+C', '', 'Proses: k hentikan · s urut · g grup/PID · / cari', 'Startup: d hapus dari autostart · Enter pulihkan', 'Bloatware: k / K hentikan · a auto-hentikan', '', 'Proses sistem & yang ada di daftar dilindungi tidak bisa dihentikan.', 'Tekan tombol apa saja untuk menutup.'];
+const HELP = ['WatchCat TUI v' + VERSION, '', 'Tab        ← →  /  Tab  /  1-9      pindah tab', 'Tab baru   n      pilih fitur; satu fitur boleh dibuka di banyak tab', 'Tutup tab  w', 'Menu       F10  atau  m', 'Segarkan   r / F5     Jeda  p        Interval  + / -', 'Daftar     ↑ ↓  PgUp PgDn  Home End · / cari · Esc hapus filter', 'Keluar     q  atau  Ctrl+C', '', 'Proses: k hentikan · s urut · g grup/PID · / cari', 'Startup: d hapus dari autostart · Enter pulihkan', 'Bloatware: k / K hentikan · a auto-hentikan', '', 'Proses sistem & yang ada di daftar dilindungi tidak bisa dihentikan.', 'Tekan tombol apa saja untuk menutup.'];
 
 function drawOverlay(scr) {
   const o = S.overlay; if (!o) return;
@@ -457,15 +494,57 @@ let prevRows = [], forceFull = true;
 function buildFrame(w, h) {
   const scr = new Screen(w, h);
   if (w < 70 || h < 18) { scr.put(1, 1, 'Terminal terlalu kecil (' + w + 'x' + h + '). Minimal 70x18. Perbesar jendela.', '33'); return scr; }
-  scr.fill(0, 0, w, 1, ' ', '30;47'); scr.put(1, 0, 'WatchCat', '1;30;46'); scr.put(10, 0, pad('F10 Menu │ n Tab baru │ w Tutup │ F1 Bantuan │ q Keluar', Math.max(0, w - 21)), '30;47'); scr.put(w - 9, 0, hhmmss(new Date()), '30;47');
-  scr.fill(0, 1, w, 1, ' ', '0;100'); let x = 0; const widths = S.tabs.map((_, i) => tabTitle(i).length + 4); let start = 0;
-  while (start < S.active && widths.slice(start, S.active + 1).reduce((a, b) => a + b, 0) > w - 2) start++;
-  for (let i = start; i < S.tabs.length && x < w; i++) { const label = ' ' + (i + 1) + ' ' + tabTitle(i) + ' '; scr.put(x, 1, label, i === S.active ? '1;30;46' : '37;100'); x += label.length + 1; }
+
+  // Header ringkas: identitas aplikasi + metrik yang tetap terbaca saat terminal dipersempit.
+  const cpuNow = S.cpu.length ? S.cpu[S.cpu.length - 1] : 0;
+  const ramNow = (1 - os.freemem() / os.totalmem()) * 100;
+  const procCount = S.procs.length;
+  scr.fill(0, 0, w, 1, ' ', '30;47');
+  scr.put(1, 0, ' WatchCat ', '1;30;46');
+  if (w >= 100) {
+    scr.put(12, 0, 'CPU ' + cpuNow.toFixed(0) + '%', cpuNow >= 85 ? '1;31;47' : '30;47');
+    scr.put(23, 0, 'RAM ' + ramNow.toFixed(0) + '%', ramNow >= 90 ? '1;31;47' : '30;47');
+    scr.put(34, 0, 'PROSES ' + procCount, '30;47');
+    scr.put(48, 0, adminCache === true ? 'ADMIN' : adminCache === false ? 'USER' : '…', '30;47');
+    scr.put(w - 9, 0, hhmmss(new Date()), '30;47');
+    scr.put(w - 33, 0, 'F10 Menu · F1 Bantuan', '30;47');
+  } else {
+    scr.put(12, 0, 'C:' + cpuNow.toFixed(0) + '%', cpuNow >= 85 ? '1;31;47' : '30;47');
+    scr.put(20, 0, 'R:' + ramNow.toFixed(0) + '%', ramNow >= 90 ? '1;31;47' : '30;47');
+    if (w >= 82) scr.put(29, 0, 'P:' + procCount, '30;47');
+    scr.put(w - 9, 0, hhmmss(new Date()), '30;47');
+  }
+
+  // Tab bar dengan penanda bila ada tab yang tersembunyi di kiri atau kanan.
+  scr.fill(0, 1, w, 1, ' ', '0;100');
+  let x = 0;
+  const widths = S.tabs.map((_, i) => (' ' + (i + 1) + ' ' + tabTitle(i) + ' ').length + 1);
+  let start = S.active;
+  while (start > 0 && widths.slice(start, S.active + 1).reduce((a, b) => a + b, 0) < w - 8) start--;
+  if (start > 0) { scr.put(0, 1, '‹', '1;36;100'); x = 2; }
+  let i = start;
+  for (; i < S.tabs.length; i++) {
+    const label = ' ' + (i + 1) + ' ' + tabTitle(i) + ' ';
+    const reserve = i < S.tabs.length - 1 ? 3 : 0;
+    if (x + label.length + reserve > w) break;
+    scr.put(x, 1, label, i === S.active ? '1;30;46' : '37;100');
+    x += label.length + 1;
+  }
+  if (i < S.tabs.length) scr.put(w - 2, 1, '›', '1;36;100');
+
   const tab = S.tabs[S.active], v = VIEWS[tab.type], r = { x: 0, y: 2, w, h: h - 3 };
   try { v.render(scr, r, tab); } catch (e) { scr.put(1, 3, 'Error tampilan: ' + e.message, '31'); }
-  scr.fill(0, h - 1, w, 1, ' ', '30;47'); scr.put(1, h - 1, pad(v.hints, w - 24), '30;47');
-  scr.put(w - 22, h - 1, pad((S.paused ? 'DIJEDA ' : '') + 'RAM kosong ' + fmtMem(os.freemem()), 21, 'r'), S.paused ? '1;31;47' : '30;47');
-  drawOverlay(scr); return scr;
+
+  // Footer memisahkan bantuan kontekstual dari status pemantauan.
+  scr.fill(0, h - 1, w, 1, ' ', '30;47');
+  scr.put(1, h - 1, pad(v.hints, Math.max(0, w - 34)), '30;47');
+  const busy = S.polling || S.startupLoading;
+  const issue = S.procErr || S.startupErr;
+  const live = S.paused ? 'JEDA' : busy ? 'MEMUAT' : issue ? 'PERIKSA' : 'LIVE';
+  scr.put(w - 32, h - 1, pad(live, 9), S.paused ? '1;31;47' : busy || issue ? '1;33;47' : '1;32;47');
+  scr.put(w - 22, h - 1, pad('RAM kosong ' + fmtMem(os.freemem()), 21, 'r'), '30;47');
+  drawOverlay(scr);
+  return scr;
 }
 function render() {
   const w = process.stdout.columns || 100, h = process.stdout.rows || 30, scr = buildFrame(w, h); let out = '';
@@ -496,6 +575,7 @@ function handleKey(str, key) {
   else if (/^[1-9]$/.test(str || '')) { if (+str <= S.tabs.length) S.active = +str - 1; }
   else if (k.name === 'n') openNewTabMenu(); else if (k.name === 'w') closeTab(S.active);
   else if (k.name === 'f10' || k.name === 'm') openMenu(); else if (k.name === 'f1' || str === '?') openHelp();
+  else if (k.name === 'f5' || (k.ctrl && k.name === 'r')) refreshAll();
   else if (k.name === 'p') { S.paused = !S.paused; } else if (k.name === 'r') refreshAll();
   else if (str === '+' || str === '=') cycleInterval(-1); else if (str === '-') cycleInterval(1); else if (k.name === 'q') quit();
 }
