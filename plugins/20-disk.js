@@ -157,7 +157,7 @@ module.exports = function (WC) {
   } else initDrives();
 
   WC.addView('disk', {
-    title: 'Disk', hints: '↑↓ pilih · c bersihkan · C bersihkan semua · r hitung ulang · v folder terbesar · s pindai ulang
+    title: 'Disk', hints: '↑↓ pilih · c bersihkan · C bersihkan semua · r hitung ulang · v folder terbesar · s pindai ulang',
     init() { return { mode: 'clean' }; },
     rows(tab) { return tab.mode === 'clean' ? D.cands.map((c) => Object.assign(c, { k: c.id })) : D.big.map((b) => Object.assign(b, { k: b.path })); },
     render(scr, r, tab) {
