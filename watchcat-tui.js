@@ -373,27 +373,30 @@ VIEWS.startup = {
 };
 
 VIEWS.memory = {
-  title: 'Memori', hints: '↑↓ pilih · s urut (tumbuh/ukuran) · pilih proses beda di tiap tab',
-  init() { return { sort: 'grow' }; },
+  title: 'Memori', hints: '↑↓ pilih · s urut · / cari · Esc hapus pencarian',
+  init() { return { sort: 'grow', query: '' }; },
   rows(tab) {
-    const rows = S.groups.filter((g) => !matchAny(g.key, CFG.rLeak) || S.hist.get(g.key)).map((g) => { const a = analyzeLeak(g.key); return { k: g.key, name: g.name, mb: g.priv / 1048576, a }; });
+    let rows = S.groups.filter((g) => !matchAny(g.key, CFG.rLeak) || S.hist.get(g.key)).map((g) => { const a = analyzeLeak(g.key); return { k: g.key, name: g.name, mb: g.priv / 1048576, a }; });
+    if (tab.query) rows = rows.filter((x) => x.name.toLowerCase().includes(tab.query.toLowerCase()));
     return rows.sort(tab.sort === 'grow' ? (x, y) => (y.a.flag - x.a.flag) || (y.a.slope - x.a.slope) : (x, y) => y.mb - x.mb);
   },
   render(scr, r, tab) {
-    const rows = this.rows(tab), chH = r.h >= 18 ? 9 : 0;
-    scr.put(r.x, r.y, pad(' Urut: ' + (tab.sort === 'grow' ? 'laju naik' : 'ukuran') + ' · ⚠ = memori naik terus (dugaan leak, bukan kepastian)', r.w), '2');
+    const rows = this.rows(tab), chH = r.h >= 18 ? 9 : 0, flagged = rows.filter((x) => x.a.flag).length;
+    const tracked = rows.reduce((n, x) => n + x.mb, 0);
+    scr.put(r.x, r.y, pad(' ' + rows.length + ' proses · ' + Math.round(tracked) + ' MB terpantau · ' + flagged + ' dugaan leak · urut ' + (tab.sort === 'grow' ? 'tren naik' : 'ukuran') + (tab.query ? ' · cari: ' + tab.query : '') + ' · ⚠ bukan kepastian', r.w), flagged ? '33' : '2');
     const cols = [{ t: '', w: 2, f: (x) => (x.a.flag ? '⚠' : ' '), style: () => '1;31' }, { t: 'Nama', w: 26, f: (x) => x.name }, { t: 'Memori', w: 10, a: 'r', f: (x) => Math.round(x.mb) + ' MB' },
       { t: 'Naik', w: 10, a: 'r', f: (x) => (x.a.n < 6 ? '…' : (x.a.growth >= 0 ? '+' : '') + Math.round(x.a.growth) + ' MB'), style: (x) => (x.a.flag ? '31' : x.a.growth > 40 ? '33' : '0') },
       { t: 'MB/menit', w: 9, a: 'r', f: (x) => (x.a.n < 6 ? '…' : x.a.slope.toFixed(1)) }, { t: 'Tren', flex: true, f: (x, w) => { const h = S.hist.get(x.k); return h ? spark(h.v, w) : ''; }, style: () => '36' }];
     const sel = drawTable(scr, r.x, r.y + 1, r.w, r.h - 1 - chH, cols, rows, tab.selKey, (x) => x.k, tab, (x) => (x.a.flag ? '31' : '0'));
     if (sel && !tab.selKey) tab.selKey = sel.k;
+    if (!rows.length) scr.put(r.x + 2, r.y + 3, tab.query ? 'Tidak ada proses cocok. Esc untuk hapus pencarian.' : 'Belum ada data proses. Tunggu satu siklus pemantauan.', '2');
     if (chH && sel) {
       const h = S.hist.get(sel.k), y = r.y + r.h - chH; if (!h || h.v.length < 2) { scr.box(r.x, y, r.w, chH, '36', 'Grafik: ' + sel.name); scr.put(r.x + 2, y + 2, 'Mengumpulkan data…', '2'); return; }
       const lo = Math.min(...h.v), hi = Math.max(...h.v), span = Math.max(hi - lo, 10), mins = (h.t[h.t.length - 1] - h.t[0]) / 60000;
       chartBox(scr, r.x, y, r.w, chH, 'Grafik: ' + sel.name + ' · ' + mins.toFixed(1) + ' menit terakhir', h.v, { top: Math.round(lo + span) + 'MB', bottom: Math.round(lo) + 'MB', lo, span, style: () => (sel.a.flag ? '31' : '36') });
     }
   },
-  key(k, tab) { const rows = this.rows(tab); if (listKey(tab, rows, k, (x) => x.k)) return true; if (k.name === 's') { tab.sort = tab.sort === 'grow' ? 'size' : 'grow'; return true; } return false; },
+  key(k, tab) { const rows = this.rows(tab); if (listKey(tab, rows, k, (x) => x.k)) return true; if (k.name === 's') { tab.sort = tab.sort === 'grow' ? 'size' : 'grow'; return true; } if (k.str === '/') { S.overlay = { type: 'input', title: 'Cari proses memori', value: tab.query, done: (v) => { tab.query = v.trim(); tab.selKey = null; } }; return true; } if (k.name === 'escape' && tab.query) { tab.query = ''; tab.selKey = null; return true; } return false; },
 };
 
 VIEWS.bloat = {
@@ -423,16 +426,20 @@ VIEWS.bloat = {
 };
 
 VIEWS.log = {
-  title: 'Log', hints: '↑↓ gulir · End ke terbaru',
-  init() { return { off: 0 }; },
+  title: 'Log', hints: '↑↓ gulir · f filter level · / cari · Esc reset · End terbaru',
+  init() { return { off: 0, level: 'ALL', query: '' }; },
+  rows(tab) { return S.log.filter((e) => (tab.level === 'ALL' || e.level === tab.level) && (!tab.query || (e.level + ' ' + e.msg).toLowerCase().includes(tab.query.toLowerCase()))); },
   render(scr, r, tab) {
-    const n = r.h - 1, total = S.log.length; tab.off = clamp(tab.off, 0, Math.max(0, total - n)); const end = total - tab.off, start = Math.max(0, end - n);
-    scr.put(r.x, r.y, pad(' ' + total + ' entri · file: ' + LOG_FILE, r.w), '2');
-    S.log.slice(start, end).forEach((e, i) => { const st = { ACTION: '32', WARN: '33', ALERT: '1;33', INFO: '0' }[e.level] || '0'; scr.put(r.x + 1, r.y + 1 + i, pad(hhmmss(e.t) + ' ' + pad(e.level, 7) + e.msg, r.w - 2), st); });
-    if (!total) scr.put(r.x + 2, r.y + 2, 'Belum ada aktivitas.', '2');
+    const rows = this.rows(tab), n = r.h - 1, total = rows.length; tab.off = clamp(tab.off, 0, Math.max(0, total - n)); const end = total - tab.off, start = Math.max(0, end - n);
+    scr.put(r.x, r.y, pad(' ' + total + '/' + S.log.length + ' entri · level ' + tab.level + (tab.query ? ' · cari: ' + tab.query : '') + ' · ' + LOG_FILE, r.w), '2');
+    rows.slice(start, end).forEach((e, i) => { const st = { ACTION: '32', WARN: '33', ALERT: '1;33', INFO: '0' }[e.level] || '0'; scr.put(r.x + 1, r.y + 1 + i, pad(hhmmss(e.t) + ' ' + pad(e.level, 7) + e.msg, r.w - 2), st); });
+    if (!total) scr.put(r.x + 2, r.y + 2, S.log.length ? 'Tidak ada log yang cocok dengan filter.' : 'Belum ada aktivitas.', '2');
   },
   key(k, tab) {
     const pg = (tab.page = 10);
+    if (k.name === 'f') { tab.level = ({ ALL: 'WARN', WARN: 'ACTION', ACTION: 'ALERT', ALERT: 'INFO', INFO: 'ALL' })[tab.level]; tab.off = 0; return true; }
+    if (k.str === '/') { S.overlay = { type: 'input', title: 'Cari log', value: tab.query, done: (v) => { tab.query = v.trim(); tab.off = 0; } }; return true; }
+    if (k.name === 'escape' && (tab.query || tab.level !== 'ALL')) { tab.query = ''; tab.level = 'ALL'; tab.off = 0; return true; }
     if (k.name === 'up') tab.off++; else if (k.name === 'down') tab.off--; else if (k.name === 'pageup') tab.off += pg; else if (k.name === 'pagedown') tab.off -= pg; else if (k.name === 'end') tab.off = 0; else if (k.name === 'home') tab.off = 1e9; else return false;
     return true;
   },
