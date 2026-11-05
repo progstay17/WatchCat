@@ -96,11 +96,13 @@ module.exports = function (WC) {
   }
   function scan() {
     if (A.scanning) return; A.scanning = true; extra = Array.isArray(WC.CFG.scanExtra) ? WC.CFG.scanExtra.filter((e) => Array.isArray(e) && e.length >= 4) : [];
-    if (!IS_WIN) { finish(evaluate(fakeData()), ''); return; }
-    WC.runPS(SCAN_PS, (e, out) => {
+    try {
+      if (!IS_WIN) { finish(evaluate(fakeData()), ''); return; }
+      WC.runPS(SCAN_PS, (e, out) => {
       if (e && !out) return finish(null, e.message.split('\n')[0]);
       try { finish(evaluate(JSON.parse(out.trim()))); } catch (x) { finish(null, 'hasil pindai tidak terbaca'); }
-    }, 120000);
+      }, 120000);
+    } catch (x) { finish(null, x.message || 'gagal memulai scan'); }
   }
 
   // ------------------------------------------------------------ aksi
